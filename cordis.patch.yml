@@ -34,28 +34,37 @@
         longTurnMs: 60000           # 耗时达到该值用「✅ 长任务完成」的说法
 
         # —— 通知外观 ——
-        priority: high              # high / low / max / min / default
+        priority: high              # 「需要你操作」时的优先级（结果类固定 default）
         sound: true
         vibrateMs: 1000             # 默认振动 1 秒；0 = 不振动；也可写 "500,1000,200"
         # 振动方式：termux-api = 额外调 `termux-vibrate -d <ms>`，直接走系统 Vibrator，
         # 不受通知渠道设置影响（通知自带的 --vibrate 在 Android 8+ 上常被渠道设置忽略）。
         # notification = 只用 termux-notification 的 --vibrate（pattern 只能走这条）。
         vibrateVia: termux-api
+        vibrateForce: true          # termux-vibrate -f：系统静音/仅振动模式下也振
+        # 悬浮通知：只有「需要你操作」的通知弹横幅；结果类不弹，避免打断。
+        headsUp: true
         # 悬浮通道 id：换一个新值（如 dsh-heads-up2）可建一个未被改过设置的全新通道，
         # 用于修复「重要性被系统/用户调低过」导致不弹横幅的旧通道。
         headsUpChannel: dsh-heads-up
-        vibrateForce: true          # termux-vibrate -f：系统静音/仅振动模式下也振
         group: dsh
         notificationId: dsh
+
+        # —— 语音通知（termux-tts-speak）——
+        voice: false
+        voiceTemplate: '{speech}'   # {speech}=场景短句；也可用 {title} {content} 自定义
+        voiceLanguage: ''           # 例如 zh / en；留空由引擎决定
+        # 语速 / 音调：Termux:API 每次都会 setSpeechRate/setPitch，不传即 1.0，
+        # 所以它会覆盖系统「文字转语音」里的设置；想和手机一致就填成同一个值。
+        voiceRate: 1
+        voicePitch: 1
 
         # —— 点击通知打开系统浏览器进 DSH 页面（推荐保持开启）——
         # 通知只负责提醒，真正的操作回浏览器里做；通知栏上的操作太容易误触。
         # 留空则恢复 termux-notification 的默认行为：点开 Termux 应用。
         tapUrl: 'http://127.0.0.1:3080/'
 
-        # —— 通道与排障 ——
-        backend: termux             # termux | command
-        # command: 'curl -s -d "{content}" https://ntfy.sh/你的主题'   # backend=command 时使用
+        # —— 排障 ——
         appProbe: true              # 启动时探测 Termux:API 应用，缺失则直接停用（否则会挂起）
         disableAfterFailures: 3
         execTimeoutMs: 8000

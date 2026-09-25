@@ -40,7 +40,6 @@ window.__ModuleLoader__.load({
     const TITLE = 'Termux 通知'
 
     const PRIORITIES = ['high', 'low', 'max', 'min', 'default']
-    const BACKENDS = ['termux', 'command']
     const VIBRATE_VIA = ['termux-api', 'notification']
 
     /**
@@ -72,12 +71,12 @@ window.__ModuleLoader__.load({
       { key: 'notificationId', label: '通知 id 前缀', type: 'text', hint: '同类通知用同一个 id 覆盖上一条' },
       { key: 'throttleMs', label: '去重窗口（毫秒）', type: 'number', min: 0, step: 100, hint: '同内容在该窗口内只发一次' },
 
-      { key: 'backend', group: '通道', label: '通道', type: 'select', options: BACKENDS, hint: 'termux = termux-notification；command = 自定义命令' },
-      { key: 'command', label: '自定义命令模板', type: 'text', hint: '支持 {title} {content} {tag}，自动 shell 转义', wide: true },
       { key: 'voice', label: '语音通知', type: 'switch', hint: '额外调 termux-tts-speak 把通知念出来（走 NOTIFICATION 音频流）' },
       { key: 'voiceTemplate', label: '播报内容模板', type: 'text', hint: '支持 {title} 与 {content}；默认只念标题，避免长摘要在公共场合被念出来', wide: true },
       { key: 'voiceLanguage', label: '播报语言', type: 'text', hint: '例如 zh / en；留空则由系统 TTS 引擎自行决定' },
-      { key: 'dryRun', label: '只写日志（dry-run）', type: 'switch', hint: '不真发通知，用来验证接线' },
+      { key: 'voiceRate', label: '播报语速', type: 'number', min: 0.25, max: 4, step: 0.05, hint: '1 = 正常。Termux:API 会覆盖系统里的语速设置，想和手机一致就填同一个值' },
+      { key: 'voicePitch', label: '播报音调', type: 'number', min: 0.25, max: 4, step: 0.05, hint: '1 = 正常。同样会被 Termux:API 覆盖系统设置' },
+      { key: 'dryRun', group: '高级', label: '只写日志（dry-run）', type: 'switch', hint: '不真发通知，用来验证接线' },
       { key: 'appProbe', label: '启动探测 Termux:API 应用', type: 'switch', hint: '缺失时直接停用，避免每次通知都留下挂起的进程' },
       { key: 'execTimeoutMs', label: '发送超时（毫秒）', type: 'number', min: 500, max: 120000, step: 500 },
       { key: 'disableAfterFailures', label: '连续失败几次后停用', type: 'number', min: 0, max: 100, step: 1 },

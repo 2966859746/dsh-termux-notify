@@ -110,8 +110,7 @@ await test('normalizeConfig 填充默认值并挡住非法值', () => {
   assert.equal(cfg.vibrateVia, 'termux-api', '默认走 Termux API 震动')
   assert.equal(cfg.vibrateForce, true, '默认静音也振')
 
-  const weird = normalizeConfig({ backend: 'nope', priority: 'urgent', snippetChars: 5, execTimeoutMs: 'x', vibrateMs: '500,1000' })
-  assert.equal(weird.backend, 'termux', '未知 backend 回退 termux')
+  const weird = normalizeConfig({ priority: 'urgent', snippetChars: 5, execTimeoutMs: 'x', vibrateMs: '500,1000' })
   assert.equal(weird.priority, 'high', '未知 priority 回退 high')
   assert.equal(weird.snippetChars, DEFAULTS.snippetChars, '越界数字回退默认')
   assert.equal(weird.execTimeoutMs, DEFAULTS.execTimeoutMs, '非数字回退默认')
@@ -382,17 +381,20 @@ await test('语音通知：默认关闭；打开后按模板调 termux-tts-speak
   on.notifier.onQuestion({ questions: [{ id: 'q', header: '选模式', question: '要用哪种模式？' }] }, () => 'A')
   await tick()
   assert.equal(on.voices.length, 1)
-  assert.deepEqual(on.voices[0].args, ['需要你选择，选模式：要用哪种模式？'], '默认念场景短句（动作 + 对象）')
+  assert.deepEqual(on.voices[0].args, ['-r', '1', '-p', '1', '需要你选择，选模式：要用哪种模式？'],
+    '默认念场景短句（动作 + 对象），并显式带语速/音调')
 
   const lang = makeEnv({ voice: true, voiceLanguage: 'zh' })
   lang.notifier.onQuestion({ questions: [{ id: 'q', question: 'q' }] }, () => 'A')
   await tick()
-  assert.deepEqual(lang.voices[0].args, ['-l', 'zh', '需要你选择，q'])
+  assert.deepEqual(lang.voices[0].args, ['-l', 'zh', '-r', '1', '-p', '1', '需要你选择，q'])
 
   const tpl = makeEnv({ voice: true, voiceTemplate: '{title}。{content}' })
   tpl.notifier.onQuestion({ questions: [{ id: 'q', question: '要用哪种模式？' }] }, () => 'A')
   await tick()
-  assert.ok(tpl.voices[0].args[0].includes('要用哪种模式？'), tpl.voices[0].args[0])
+  const tplSpoken = tpl.voices[0].args[tpl.voices[0].args.length - 1]
+  assert.ok(tplSpoken.startsWith('❓ 需要选择。'), tplSpoken)
+  assert.ok(tplSpoken.includes('要用哪种模式？'), tplSpoken)
 
   const noTts = makeEnv({ voice: true }, { ttsFound: false })
   noTts.notifier.onQuestion({ questions: [{ id: 'q', question: 'q' }] }, () => 'A')
@@ -439,13 +441,30 @@ await test('语音通知：引擎卡住连续失败到阈值后就停用播报�
   assert.ok(env.logs.some((line) => line.includes('TTS 引擎卡住了')), env.logs.join('\n'))
 })
 
+await test('语音通知：语速/音调显式传给 Termux:API（否则它会把手机设置强制成 1.0）', async () => {
+  const env = makeEnv({ voice: true, voiceRate: 1.4, voicePitch: 0.9 })
+  env.notifier.onQuestion({ questions: [{ id: 'q', question: 'q' }] }, () => 'A')
+  await tick()
+  const args = env.voices[0].args
+  assert.equal(args[args.indexOf('-r') + 1], '1.4')
+  assert.equal(args[args.indexOf('-p') + 1], '0.9')
+
+  // 越界值在宿主侧是「回退默认」（与其它数值字段一致），收敛发生在设置页表单里
+  const outOfRange = makeEnv({ voice: true, voiceRate: 99, voicePitch: 0.01 })
+  outOfRange.notifier.onQuestion({ questions: [{ id: 'q', question: 'q' }] }, () => 'A')
+  await tick()
+  const cargs = outOfRange.voices[0].args
+  assert.equal(cargs[cargs.indexOf('-r') + 1], '1', '超上限回退默认')
+  assert.equal(cargs[cargs.indexOf('-p') + 1], '1', '超下限回退默认')
+})
+
 await test('语音通知：超时按文本长度自适应（TTS 会阻塞到播完）', async () => {
   const env = makeEnv({ voice: true, voiceTemplate: '{content}', execTimeoutMs: 8000 })
   env.notifier.onQuestion({ questions: [{ id: 'q', question: 'x'.repeat(200) }] }, () => 'A')
   await tick()
   const spoken = env.voices[0].args[env.voices[0].args.length - 1]
   assert.ok(env.voices[0].opts.timeoutMs > 8000, `TTS 超时应比通知超时更宽松，实际 ${env.voices[0].opts.timeoutMs}`)
-  assert.equal(env.voices[0].opts.timeoutMs, Math.min(90000, Math.max(30000, spoken.length * 600)))
+  assert.equal(env.voices[0].opts.timeoutMs, Math.min(90000, Math.max(20000, spoken.length * 600)))
 })
 
 // ---------------------------------------------------------------- 结果通知
@@ -493,7 +512,7 @@ await test('结果：中止/被阻止/达到上限各有对应说法', async () 
     notifier.onSessionEvent(session, { type: 'turn/end', data: { turn: 1, reason: { kind } } })
     await tick()
     assert.equal(flagValue(calls[0].args, '--title'), title, kind)
-    assert.equal(voices[0].args[0], speech, kind)
+    assert.equal(voices[0].args[voices[0].args.length - 1], speech, kind)
   }
 })
 
@@ -580,17 +599,6 @@ await test('通道：Termux:API 应用缺失时启动即停用（避免挂起）
   notifier.onQuestion({ questions: [{ id: 'q', question: 'q' }] }, () => 'A')
   await tick()
   assert.equal(calls.length, 0, '停用后不应再执行命令')
-})
-
-await test('通道：backend=command 走自定义命令并做 shell 转义', async () => {
-  const { notifier, calls } = makeEnv({ backend: 'command', command: 'notify {title} {content}' })
-  notifier.onQuestion({ questions: [{ id: 'q', question: "it's a test" }] }, () => 'A')
-  await tick()
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].file, 'sh')
-  assert.equal(calls[0].args[0], '-c')
-  assert.ok(calls[0].args[1].startsWith('notify '), calls[0].args[1])
-  assert.ok(calls[0].args[1].includes(`'\\''`), '单引号必须转义')
 })
 
 await test('通道：dryRun 只写日志不发命令', async () => {
@@ -843,7 +851,7 @@ await test('环境检测：试发会一并走通悬浮通道与语音播报', as
   assert.equal(env.vibrates.length >= 1, true, '试发也应振动')
 })
 
-await test('环境检测：dry-run / 关闭 / command 通道都会如实说明', async () => {
+await test('环境检测：dry-run / 关闭都会如实说明', async () => {
   const dry = await makeEnv({ dryRun: true }).notifier.runEnvironmentCheck()
   assert.equal(stepOf(dry, 'config').status, 'warn')
   assert.match(stepOf(dry, 'config').detail, /dry-run/)
@@ -851,13 +859,9 @@ await test('环境检测：dry-run / 关闭 / command 通道都会如实说明',
   const off = await makeEnv({ enabled: false }).notifier.runEnvironmentCheck()
   assert.equal(stepOf(off, 'config').status, 'warn')
 
-  const command = await makeEnv({ backend: 'command', command: '' }).notifier.runEnvironmentCheck()
-  assert.equal(stepOf(command, 'channel').status, 'fail')
-  assert.match(stepOf(command, 'channel').hint, /自定义命令模板/)
-
-  const commandOk = await makeEnv({ backend: 'command', command: 'notify {title}' }).notifier.runEnvironmentCheck()
-  assert.equal(stepOf(commandOk, 'channel').status, 'ok')
-  assert.equal(stepOf(commandOk, 'command'), undefined, 'command 通道不做 Termux 检测')
+  const ok = await makeEnv().notifier.runEnvironmentCheck()
+  assert.equal(stepOf(ok, 'config').status, 'ok')
+  assert.equal(stepOf(ok, 'config').detail, '已启用', '不再展示通道名（只剩 Termux API 一条路）')
 })
 
 await test('环境检测：试发成功会复位“已停用”，失败则报出来', async () => {

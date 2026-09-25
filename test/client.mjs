@@ -220,6 +220,9 @@ await test('parseDraft：数字越界收敛、振动支持 pattern、非法输�
   assert.equal(parseDraft(byKey.vibrateMs, '500,1000,200'), '500,1000,200', 'pattern 保持字符串')
   assert.equal(parseDraft(byKey.vibrateMs, ''), 0, '空串视为不振动')
   assert.equal(parseDraft(byKey.vibrateMs, 'nope'), undefined, '非法 pattern 忽略')
+  assert.equal(parseDraft(byKey.voiceRate, '99'), 4, '语速超上限在表单侧收敛')
+  assert.equal(parseDraft(byKey.voiceRate, '0.01'), 0.25, '语速超下限在表单侧收敛')
+  assert.equal(parseDraft(byKey.voicePitch, '1.5'), 1.5, '音调原样通过')
 })
 
 await test('apply：绑定命名空间并注册独立的 settings.section（不是插件页卡片）', () => {

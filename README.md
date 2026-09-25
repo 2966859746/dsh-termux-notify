@@ -58,7 +58,9 @@
    pkg install termux-api
    ```
 
-3. **安装「Termux:API」应用**（APK，必须单独装，只装上面的包不够）：
+3. **安装「Termux:API」应用**（APK，必须单独装，只装上面的包不够）。
+   插件**强依赖 Termux API 一路通道**：没有 `termux-notification` + Termux:API 应用就发不出通知
+   （插件会在启动时探测，缺失就停用并在设置页的「检测环境」里写清原因）：
 
    - F-Droid：<https://f-droid.org/packages/com.termux.api/>
    - 或 GitHub Releases：<https://github.com/termux/termux-api/releases>
@@ -177,9 +179,9 @@ bash "$PLUGIN_DIR/scripts/check-integration.sh"
 | 语音通知 | 关 | 额外调 `termux-tts-speak` 把通知念出来（走 `NOTIFICATION` 音频流） |
 | 播报内容模板 | `{speech}` | `{speech}` = 该场景的短句（推荐）；也支持 `{title}` `{content}` 自定义成完整句子 |
 | 播报语言 | 空 | 例如 `zh` / `en`；留空则由系统 TTS 引擎自行决定 |
+| 播报语速 | `1` | `1` = 正常。**Termux:API 会覆盖手机里的语速设置**，想和手机一致就填同一个值（见下面常见问题） |
+| 播报音调 | `1` | `1` = 正常。同上，也会被 Termux:API 覆盖 |
 | 去重窗口（毫秒） | `1500` | 同内容在这个窗口内只发一次 |
-| 通道 | `termux` | `termux` = 用 `termux-notification`；`command` = 用自定义命令 |
-| 自定义命令模板 | 空 | `通道 = command` 时使用，支持 `{title}` `{content}` `{tag}`（自动 shell 转义） |
 | 只写日志（dry-run） | 关 | 打开后只写日志、不真发通知，用来验证接线 |
 | 启动探测 Termux:API 应用 | 开 | 缺失时直接停用，避免每次通知都留下挂起的进程 |
 
@@ -195,26 +197,15 @@ bash "$PLUGIN_DIR/scripts/check-integration.sh"
     - id: dsh-termux-notify
       name: dsh-termux-notify
       config:
-        titlePrefix: 深寻
         minTurnDurationMs: 5000
         vibrateMs: 0
+        headsUp: false
 ```
 
 > patch 是**整份 config 替换**而不是逐键合并：没写出来的键会由插件内置默认值补齐，
 > 所以只写你关心的几个键是安全的。
 >
 > 优先级：内置默认 < patch 部署配置 < `settings.yaml` 用户覆盖（设置页）。
-
-### 不想装 Termux:API 应用？换通道
-
-把「通道」改成 `command`，用任何命令发通知，例如 [ntfy](https://ntfy.sh)：
-
-```yaml
-        backend: command
-        command: 'curl -s -H "Title: {title}" -d {content} https://ntfy.sh/你的主题'
-```
-
-这样就不依赖 Termux:API 应用了（`{title}` / `{content}` 会被自动 shell 转义后填入）。
 
 ---
 
@@ -257,6 +248,22 @@ bash "$PLUGIN_DIR/scripts/check-integration.sh"
 > 而 Android 不会为更新弹横幅。所以「需要你操作」的通知每次都换一个新 tag
 > （代价是这类通知不再互相覆盖，会在通知栏里各占一条）；结果类仍用固定 tag 覆盖上一条。
 
+**语音的语速 / 音调和我在手机「文字转语音」里设置的不一样**
+
+这是 Termux:API 的固定行为，不是插件改写你的设置。它每次播报都会调用：
+
+```java
+mTts.setPitch(...);                                          // 不传 -p 就是 1.0
+mTts.setSpeechRate(intent.getFloatExtra("rate", 1.0f));       // 不传 -r 就是 1.0
+```
+
+也就是**无论你手机里配的是多少，它都会按参数重设一遍，缺省值就是 1.0** —— 于是你手机里的语速被盖掉了。
+而那个值在 Termux 里读不到（`settings get secure tts_default_rate` 需要 `INTERACT_ACROSS_USERS` 权限），
+插件没法自动跟随。
+
+想和手机一致，就在设置页把「播报语速」「播报音调」填成手机里的同一个值即可。
+手机上的语速滑块一般会显示倍率（例如 `1.0x` / `1.3x`），照着填就行。
+
 **语音通知不出声**
 
 先在 Termux 里手敲一次，这是最快的判断：
@@ -266,10 +273,10 @@ termux-tts-speak 测试
 ```
 
 - **能出声** → 引擎没问题，去设置页确认「语音通知」是打开的（默认关闭）；
-- **一直卡住不返回**（按 `Ctrl+C` 退出）→ **系统 TTS 引擎卡死了**，这是设备侧的问题，不是插件：
-  去系统设置 → 语言与输入 / 无障碍 → 文字转语音，换一个引擎（或装一个，例如 Google 语音服务），
-  再不行重启手机。插件侧的超时是 30 秒起步，卡住时会被杀掉；连续失败到阈值后，本次运行会
-  **自动停止播报**并在日志里说明，不会每条通知都挂一个进程；
+- **一直卡住不返回**（按 `Ctrl+C` 退出）→ TTS 引擎**被占住或排队堵住了**。常见于短时间内反复触发播报、
+  或上一次被强杀后残留了等待中的请求；**重启 Termux（或重开 Termux 会话）即可恢复**，实测恢复正常后
+  4 个字约 2.7 秒。插件侧也做了防护：超时按文本长度自适应（20–90 秒），卡住时会被杀掉且不会留下挂起进程；
+  上一条还在念时会跳过新的而不是排队；连续失败到阈值后本次运行**自动停止播报**并在日志里说明；
 - **报错** → 去上面那个系统设置里安装 / 选择一个引擎，再跑 `termux-tts-engines` 应输出 JSON；
 - 播报走 `NOTIFICATION` 音频流，所以**系统静音时通常不出声** —— 这是 Android 的行为，不是插件问题；
 - 「播报语言」填了引擎不支持的语言时可能不出声，留空让引擎自选即可。
@@ -337,6 +344,8 @@ node "$HOME/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js" plugin --profile web r
   `libexec/termux-api NotificationChannel ... --es priority high` 来建通道。
   另一个坑：给 `--channel` 传一个**不存在的通道 id，通知会被系统直接丢弃** ——
   因此插件先确认通道建好，建不成就退回默认通道，绝不引用不确定存在的通道。
+- **语速/音调必须显式传**：Termux:API 每次都会 `setSpeechRate`/`setPitch`，缺省 1.0，
+  所以「不传」不是「跟随系统」而是静默变成 1.0；插件显式传 `-r`/`-p`，让它由设置项决定。
 - **语音通知**：`termux-tts-speak` 会**阻塞到播完**才返回，所以它的超时按文本长度自适应
   （30–90 秒），不能沿用通知的 8 秒超时，否则长句会被念到一半杀掉；上一条还在念时跳过新的，
   避免排队念一串过期消息。
