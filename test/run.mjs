@@ -417,8 +417,49 @@ await test('清空旧通知：子会话的轮次不会清掉主会话的提醒',
   assert.equal(env.removals.length, 1, '主会话新一轮才清')
 })
 
+await test('清空旧通知：在浏览器里答完提问后立刻撤掉那条提醒', async () => {
+  const env = makeEnv({ throttleMs: 0 })
+  let resolveAnswer
+  const answer = new Promise((resolve) => { resolveAnswer = resolve })
+  // 模拟 waterfall：通知发出 → 用户过一会儿才在浏览器里回答
+  const result = env.notifier.onQuestion({ questions: [{ id: 'q', question: 'q' }] }, () => answer)
+  await tick()
+  assert.equal(env.calls.length, 1, '通知应已发出')
+  const tag = flagValue(env.calls[0].args, '--id')
+  assert.equal(env.removals.length, 0, '还没回答，通知应留着')
+
+  resolveAnswer('ANSWER')
+  assert.equal(await result, 'ANSWER', '落定值必须原样透传给 waterfall')
+  await tick()
+  await tick()
+  assert.deepEqual(env.removals.map((call) => call.args[0]), [tag], '回答后立刻撤销')
+})
+
+await test('清空旧通知：审批被决定后同样撤掉', async () => {
+  const env = makeEnv({ throttleMs: 0 })
+  let decide
+  const pending = new Promise((resolve) => { decide = resolve })
+  const result = env.notifier.onApproval({ agent: {}, toolName: 'bash' }, () => pending)
+  await tick()
+  const tag = flagValue(env.calls[0].args, '--id')
+  decide('allowed-once')
+  assert.equal(await result, 'allowed-once')
+  await tick()
+  await tick()
+  assert.deepEqual(env.removals.map((call) => call.args[0]), [tag])
+})
+
+await test('清空旧通知：提问被拒绝/无回答者时也会清掉（提醒已无效）', async () => {
+  const env = makeEnv({ throttleMs: 0 })
+  const result = env.notifier.onQuestion({ questions: [{ id: 'q', question: 'q' }] }, () => Promise.reject(new Error('NO_PROVIDER')))
+  await assert.rejects(() => result, /NO_PROVIDER/)
+  await tick()
+  await tick()
+  assert.equal(env.removals.length, 1, '失败落定也要清')
+})
+
 await test('清空旧通知：关掉开关就完全不动', async () => {
-  const env = makeEnv({ throttleMs: 0, clearOnNewTurn: false })
+  const env = makeEnv({ throttleMs: 0, clearStale: false })
   env.notifier.onSessionEvent(session, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
   await tick()
   env.notifier.onSessionEvent(session, { type: 'turn/start', data: { turn: 2 } })
@@ -440,7 +481,7 @@ await test('清空旧通知：缺 termux-notification-remove 时告警一次且�
 })
 
 await test('清空旧通知：手动调用返回撤销条数，清完即空', async () => {
-  const env = makeEnv({ throttleMs: 0, clearOnNewTurn: false })
+  const env = makeEnv({ throttleMs: 0, clearStale: false })
   env.notifier.onSessionEvent(session, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
   env.notifier.onSessionEvent(session, { type: 'turn/end', data: { turn: 2, reason: { kind: 'aborted' } } })
   await tick()
@@ -934,9 +975,9 @@ await test('环境检测：试发会一并走通悬浮通道与语音播报', as
 await test('环境检测：清空旧通知一项说明策略，并在请求时真的执行', async () => {
   const on = await makeEnv().notifier.runEnvironmentCheck()
   assert.equal(stepOf(on, 'clear').status, 'ok')
-  assert.match(stepOf(on, 'clear').detail, /每轮开始时/)
+  assert.match(stepOf(on, 'clear').detail, /新一轮开始、或你回答完提问\/审批/)
 
-  const off = await makeEnv({ clearOnNewTurn: false }).notifier.runEnvironmentCheck()
+  const off = await makeEnv({ clearStale: false }).notifier.runEnvironmentCheck()
   assert.equal(stepOf(off, 'clear').status, 'skip')
   assert.match(stepOf(off, 'clear').detail, /已关闭/)
 

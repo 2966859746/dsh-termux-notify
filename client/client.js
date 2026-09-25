@@ -55,7 +55,7 @@ window.__ModuleLoader__.load({
       { key: 'notifyChildSessions', label: '子 agent 轮次也通知', type: 'switch', hint: '默认关，避免刷屏' },
       { key: 'minTurnDurationMs', label: '最短耗时（毫秒）', type: 'number', min: 0, step: 1000, hint: '耗时更短的轮次不通知；0 = 每轮都通知' },
       { key: 'longTurnMs', label: '长任务阈值（毫秒）', type: 'number', min: 1000, step: 1000, hint: '耗时达到该值的轮次用「✅ 长任务完成」的说法' },
-      { key: 'clearOnNewTurn', label: '新一轮开始时清空旧通知', type: 'switch', hint: '清掉上一轮发过、还没点掉的通知（只撤本插件自己的，不动别的应用）' },
+      { key: 'clearStale', label: '回到对话时清空过时通知', type: 'switch', hint: '新一轮开始、或你在浏览器里回答完提问/审批时，撤销本插件发过、还没点掉的通知（只撤自己的 tag）' },
 
       { key: 'includeSnippet', label: '附带结果摘要', type: 'switch', hint: '把模型最后一段文本放进通知正文' },
       { key: 'snippetChars', label: '摘要长度（字符）', type: 'number', min: 20, max: 2000, step: 20 },
