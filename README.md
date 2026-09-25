@@ -25,7 +25,8 @@
 
 轮次异常结束时标题会变成 `出错` / `已中断` / `被阻塞` / `达到输出上限`。
 
-默认行为：**振动 1 秒**、**点通知用浏览器打开 DSH 页面**、通知栏上没有按钮。
+默认行为：**弹悬浮横幅**（悬浮通知）、**振动 1 秒**、**点通知用浏览器打开 DSH 页面**、通知栏上没有按钮。
+还可以打开**语音通知**，让手机直接把通知念出来。
 
 ---
 
@@ -150,8 +151,12 @@ bash "$PLUGIN_DIR/scripts/check-integration.sh"
 | 振动 | `1000` | 毫秒；`0` = 不振动；也可写 `500,1000,200` 这种 pattern |
 | 振动方式 | `termux-api` | `termux-api` = 调用 `termux-vibrate`（推荐，不受通知渠道设置影响）；`notification` = 用通知自带的 `--vibrate` |
 | 静音也振动 | 开 | 对应 `termux-vibrate -f`：系统静音/仅振动模式下也振 |
+| 悬浮通知 | 开 | 用一个**重要性 HIGH** 的专用通道（`dsh-heads-up` / 「DSH 悬浮通知」），让通知像横幅一样弹出来；关掉则只进通知栏 |
 | 点击通知打开 | `http://127.0.0.1:3080/` | 点通知时用 `termux-open-url` 打开这个地址；留空则改为打开 Termux 应用 |
 | 通知分组 / id 前缀 | `dsh` | 同类通知覆盖上一条，三类各占一条 |
+| 语音通知 | 关 | 额外调 `termux-tts-speak` 把通知念出来（走 `NOTIFICATION` 音频流） |
+| 播报内容模板 | `{title}` | 支持 `{title}` 与 `{content}`；默认只念标题，避免长摘要在公共场合被念出来 |
+| 播报语言 | 空 | 例如 `zh` / `en`；留空则由系统 TTS 引擎自行决定 |
 | 去重窗口（毫秒） | `1500` | 同内容在这个窗口内只发一次 |
 | 通道 | `termux` | `termux` = 用 `termux-notification`；`command` = 用自定义命令 |
 | 自定义命令模板 | 空 | `通道 = command` 时使用，支持 `{title}` `{content}` `{tag}`（自动 shell 转义） |
@@ -214,6 +219,23 @@ bash "$PLUGIN_DIR/scripts/check-integration.sh"
 - 填的是 `500,1000,200` 这种 pattern 时只能走通知渠道（`termux-vibrate` 只接受单个毫秒数），
   检测页会说明这一点。
 
+**悬浮通知不弹横幅**
+
+- 确认「悬浮通知」是打开的（关掉后通知只进通知栏，这是设计行为）；
+- 弹横幅由**通道重要性**决定，插件会建一个重要性 HIGH 的通道 `dsh-heads-up`。
+  若仍不弹，去系统设置里检查 Termux:API 的「悬浮通知 / 横幅通知 / 弹出通知」权限（不少国产 ROM 单独有这一项，
+  且默认关闭），以及是否处于勿扰模式；
+- 部分 ROM 会把已有通道的改动当成「用户设置」而拒绝提升重要性。可以删掉通道再让插件重建：
+  `termux-notification-channel -d dsh-heads-up`，然后重启 DSH。
+
+**语音通知不出声**
+
+- 确认「语音通知」是打开的（默认关闭）；
+- 先确认系统里有 TTS 引擎：`termux-tts-engines` 应输出 JSON。没有就去
+  系统设置 → 语言与输入 / 无障碍 → 文字转语音，安装或选择一个引擎；
+- 播报走 `NOTIFICATION` 音频流，所以系统静音时通常不出声 —— 这是 Android 的行为，不是插件问题；
+- 「播报语言」填了引擎不支持的语言时可能不会出声，留空让引擎自选即可。
+
 **点通知没有打开浏览器**
 
 - 检查「点击通知打开」是否被清空了（留空会改为打开 Termux 应用）；
@@ -268,6 +290,14 @@ node "$HOME/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js" plugin --profile web r
   （只杀直接子进程会留下挂起的广播进程）。
 - **振动走 `termux-vibrate`**：直接调用系统 Vibrator 服务，不经过通知渠道，
   绕开 Android 8+ 上「渠道设置把 `--vibrate` 吃掉」这个常见问题。
+- **悬浮通知要绕一层**：Android 8+ 上「弹不弹横幅」由**通道重要性**决定，而不是 `--priority`。
+  Termux:API 建通道时从 intent 的 `priority` extra 读重要性，但随包的 `termux-notification-channel`
+  包装脚本**不传**这个 extra（建出来是 DEFAULT，不弹横幅），所以插件直接调底层的
+  `libexec/termux-api NotificationChannel ... --es priority high` 来建通道。
+  另一个坑：给 `--channel` 传一个**不存在的通道 id，通知会被系统直接丢弃** ——
+  因此插件先确认通道建好，建不成就退回默认通道，绝不引用不确定存在的通道。
+- **语音通知**：`termux-tts-speak` 会**阻塞到播完**才返回，所以它的超时按文本长度自适应
+  （15–60 秒），不能沿用通知的 8 秒超时，否则长句会被念到一半杀掉。
 - **设置页**：宿主用 `ctx.settings.installSection()` 注册运行时命名空间，浏览器半侧往
   `settings.section` 槽注册一页，两者 key 相同才会渲染出来。改动经 settings 服务持久化到
   `settings.yaml`，因此不重启就能生效。
@@ -282,14 +312,15 @@ git clone https://github.com/2966859746/dsh-termux-notify
 cd dsh-termux-notify
 
 npm test          # 三套一起跑
-node test/run.mjs         # 宿主：配置、argv 组装、节流、停用、真实超时与进程组清理、设置接线、环境检测
+node test/run.mjs         # 37 项宿主：配置、argv 组装、节流、停用、真实超时与进程组清理、悬浮通道、语音播报、环境检测
 node test/integration.mjs # 用真实 cordis 加载插件，验证 waterfall 委托与 agent scope 派发
 node test/client.mjs      # 假浏览器 + 迷你 React 加载 client bundle，验证设置页渲染与写入
 ```
 
 `test/integration.mjs` 需要 `@deepseek-ai/cordis` 与 `@deepseek-ai/dsh-scope`，
 所以测试只在**仓库里**跑得起来（安装副本不含 `test/`，由 `scripts/check-integration.sh` 自动跳过）。
-其中有一项会真的起一个 `sleep 30` 子进程，验证超时兜底确实杀掉了整个进程组。
+其中有一项会真的起一个 `sleep 30` 子进程，验证超时兜底确实杀掉了整个进程组；
+悬浮通知的用例还专门覆盖了「通道建不成时绝不引用它」（引用不存在的通道会让通知被系统丢弃）。
 
 ## 许可
 

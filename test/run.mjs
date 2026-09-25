@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict'
 import { execSync } from 'node:child_process'
-import { apply, createNotifier, defaultExec, normalizeConfig, CHECK_ROUTE_PATH, DEFAULTS, SETTINGS_NAMESPACE, SettingsSchema } from '../lib/index.js'
+import { apply, createNotifier, defaultExec, normalizeConfig, CHANNEL_ID, CHANNEL_NAME, CHECK_ROUTE_PATH, DEFAULTS, SETTINGS_NAMESPACE, SettingsSchema } from '../lib/index.js'
 
 let passed = 0
 let failed = 0
@@ -27,7 +27,17 @@ async function test(title, fn) {
 }
 
 const tick = () => new Promise((resolve) => setImmediate(resolve))
+/** 读 `--es <key> <value>` 形式里某个 key 的值（am 的 extras 是三元组，flagValue 读不了）。 */
+function esValue(args, key) {
+  for (let i = 0; i + 2 < args.length; i += 1) {
+    if (args[i] === '--es' && args[i + 1] === key) return args[i + 2]
+  }
+  return undefined
+}
+
 const VIBRATE_BIN = '/fake/bin/termux-vibrate'
+const TTS_BIN = '/fake/bin/termux-tts-speak'
+const CHANNEL_HELPER = '/fake/libexec/termux-api'
 
 /** 从一个 argv 里读某个 flag 的值。 */
 function flagValue(args, flag) {
@@ -37,15 +47,36 @@ function flagValue(args, flag) {
 
 /** 造一个只记录调用的通知器环境。 */
 function makeEnv(config = {}, options = {}) {
+  // calls 始终只表示「通知调用」，其余按用途分桶，断言就不必关心彼此顺序。
   const calls = []
   const vibrates = []
+  const voices = []
+  const channels = []
+  const engines = []
+  const order = []
   const logs = []
   let clock = 1_000_000
   const notifier = createNotifier(config, {
     exec: (file, args, opts) => {
-      // 振动调用单独收集：calls 始终只表示“通知调用”，断言不必关心两者顺序。
-      if (file === VIBRATE_BIN) vibrates.push({ file, args, opts })
-      else calls.push({ file, args, opts })
+      if (file === VIBRATE_BIN) {
+        vibrates.push({ file, args, opts })
+        order.push('vibrate')
+      } else if (file === TTS_BIN) {
+        voices.push({ file, args, opts })
+        order.push('voice')
+      } else if (file === 'termux-tts-engines') {
+        engines.push({ file, args, opts })
+        return Promise.resolve(options.enginesMissing ? '' : '[{"name":"com.example.tts","label":"Test TTS","default":true}]')
+      } else if (/libexec\/termux-api$/.test(file)) {
+        channels.push({ file, args, opts })
+        order.push('channel')
+        if (options.channelFails) return Promise.reject(new Error('channel boom'))
+        if (options.channelSaysNo) return Promise.resolve('Could not create/delete.')
+        return Promise.resolve(`Created channel with id "${CHANNEL_ID}" and name "${CHANNEL_NAME}".`)
+      } else {
+        calls.push({ file, args, opts })
+        order.push('notify')
+      }
       if (options.execFails) return Promise.reject(new Error(options.execFails))
       return Promise.resolve('')
     },
@@ -54,9 +85,11 @@ function makeEnv(config = {}, options = {}) {
     findBin: () => (options.binFound === false ? undefined : '/fake/bin/termux-notification'),
     findOpener: () => (options.openerFound === false ? undefined : '/fake/bin/termux-open-url'),
     findVibrateBin: () => (options.vibrateBinFound === false ? undefined : VIBRATE_BIN),
+    findTtsBin: () => (options.ttsFound === false ? undefined : TTS_BIN),
+    channelHelper: () => (options.channelHelperFound === false ? undefined : CHANNEL_HELPER),
     probeApp: () => (options.appInstalled === false ? false : options.appUnknown === true ? undefined : true),
   })
-  return { notifier, calls, vibrates, logs, setClock: (value) => { clock = value } }
+  return { notifier, calls, vibrates, voices, channels, engines, order, logs, setClock: (value) => { clock = value } }
 }
 
 const session = { id: 's1', header: { id: 's1' } }
@@ -215,6 +248,111 @@ await test('审批：通知里带工具名与原因，并委托下游', async ()
   const content = flagValue(calls[0].args, '--content')
   assert.ok(content.includes('bash'), content)
   assert.ok(content.includes('需要写入工作区之外'), content)
+})
+
+// --------------------------------------------------------------- 悬浮通知
+await test('悬浮通知：先建 HIGH 重要性通道，再在通知里引用它', async () => {
+  const env = makeEnv()
+  env.notifier.onQuestion({ questions: [{ id: 'q', question: 'q' }] }, () => 'A')
+  await tick()
+
+  assert.equal(env.channels.length, 1, '应先建通道')
+  const cargs = env.channels[0].args
+  assert.equal(cargs[0], 'NotificationChannel')
+  assert.equal(esValue(cargs, 'id'), CHANNEL_ID)
+  assert.equal(esValue(cargs, 'name'), CHANNEL_NAME)
+  assert.equal(esValue(cargs, 'priority'), 'high', '重要性必须显式传 high（包装脚本不传，默认不悬浮）')
+
+  assert.equal(flagValue(env.calls[0].args, '--channel'), CHANNEL_ID)
+  assert.ok(env.order.indexOf('channel') < env.order.indexOf('notify'), '必须先建通道再引用它')
+})
+
+await test('悬浮通知：关掉时不建通道也不传 --channel', async () => {
+  const env = makeEnv({ headsUp: false })
+  env.notifier.onQuestion({ questions: [{ id: 'q', question: 'q' }] }, () => 'A')
+  await tick()
+  assert.equal(env.channels.length, 0)
+  assert.equal(env.calls[0].args.includes('--channel'), false)
+  assert.equal(env.logs.length, 0)
+})
+
+await test('悬浮通知：通道建不成时退回默认通道（绝不引用不存在的通道）', async () => {
+  // helper 不存在
+  const noHelper = makeEnv({}, { channelHelperFound: false })
+  noHelper.notifier.onQuestion({ questions: [{ id: 'q1', question: 'q1' }] }, () => 'A')
+  await tick()
+  assert.equal(noHelper.channels.length, 0)
+  assert.equal(noHelper.calls[0].args.includes('--channel'), false)
+  assert.ok(noHelper.logs.some((line) => line.includes('找不到 Termux:API 的 libexec/termux-api')), noHelper.logs.join('\n'))
+  // 再发一次仍然只告警一次
+  noHelper.notifier.onQuestion({ questions: [{ id: 'q2', question: 'q2' }] }, () => 'A')
+  await tick()
+  assert.equal(noHelper.logs.filter((line) => line.includes('libexec/termux-api')).length, 1)
+
+  // 助手"成功返回"但文本说建不了（助手把失败也当数据返回）
+  const saysNo = makeEnv({}, { channelSaysNo: true })
+  saysNo.notifier.onQuestion({ questions: [{ id: 'q', question: 'q' }] }, () => 'A')
+  await tick()
+  assert.equal(saysNo.calls[0].args.includes('--channel'), false, '建不成还引用的话通知会被系统丢弃')
+  assert.ok(saysNo.logs.some((line) => line.includes('创建悬浮通知通道失败')), saysNo.logs.join('\n'))
+
+  // 调用直接抛错
+  const fails = makeEnv({}, { channelFails: true })
+  fails.notifier.onQuestion({ questions: [{ id: 'q', question: 'q' }] }, () => 'A')
+  await tick()
+  assert.equal(fails.calls[0].args.includes('--channel'), false)
+  assert.ok(fails.logs.some((line) => line.includes('创建悬浮通知通道失败')))
+})
+
+await test('悬浮通知：通道只建一次（缓存）', async () => {
+  const env = makeEnv({ throttleMs: 0 })
+  env.notifier.onQuestion({ questions: [{ id: 'q1', question: 'q1' }] }, () => 'A')
+  await tick()
+  env.notifier.onQuestion({ questions: [{ id: 'q2', question: 'q2' }] }, () => 'A')
+  await tick()
+  assert.equal(env.calls.length, 2)
+  assert.equal(env.channels.length, 1, '通道应缓存，不该每条通知都重建')
+  assert.equal(flagValue(env.calls[1].args, '--channel'), CHANNEL_ID)
+})
+
+// --------------------------------------------------------------- 语音通知
+await test('语音通知：默认关闭；打开后按模板调 termux-tts-speak', async () => {
+  const off = makeEnv()
+  off.notifier.onQuestion({ questions: [{ id: 'q', question: 'q' }] }, () => 'A')
+  await tick()
+  assert.equal(off.voices.length, 0, '默认不播报')
+
+  const on = makeEnv({ voice: true })
+  on.notifier.onQuestion({ questions: [{ id: 'q', header: '选模式', question: '要用哪种模式？' }] }, () => 'A')
+  await tick()
+  assert.equal(on.voices.length, 1)
+  assert.deepEqual(on.voices[0].args, ['DSH · 需要你选择'], '默认模板只念标题')
+
+  const lang = makeEnv({ voice: true, voiceLanguage: 'zh' })
+  lang.notifier.onQuestion({ questions: [{ id: 'q', question: 'q' }] }, () => 'A')
+  await tick()
+  assert.deepEqual(lang.voices[0].args, ['-l', 'zh', 'DSH · 需要你选择'])
+
+  const tpl = makeEnv({ voice: true, voiceTemplate: '{title}。{content}' })
+  tpl.notifier.onQuestion({ questions: [{ id: 'q', question: '要用哪种模式？' }] }, () => 'A')
+  await tick()
+  assert.ok(tpl.voices[0].args[0].includes('要用哪种模式？'), tpl.voices[0].args[0])
+
+  const noTts = makeEnv({ voice: true }, { ttsFound: false })
+  noTts.notifier.onQuestion({ questions: [{ id: 'q', question: 'q' }] }, () => 'A')
+  await tick()
+  assert.equal(noTts.voices.length, 0)
+  assert.equal(noTts.calls.length, 1, '播报失败不影响通知本身')
+  assert.ok(noTts.logs.some((line) => line.includes('找不到 termux-tts-speak')), noTts.logs.join('\n'))
+})
+
+await test('语音通知：超时按文本长度自适应（TTS 会阻塞到播完）', async () => {
+  const env = makeEnv({ voice: true, voiceTemplate: '{content}', execTimeoutMs: 8000 })
+  env.notifier.onQuestion({ questions: [{ id: 'q', question: 'x'.repeat(200) }] }, () => 'A')
+  await tick()
+  const spoken = env.voices[0].args[env.voices[0].args.length - 1]
+  assert.ok(env.voices[0].opts.timeoutMs > 8000, `TTS 超时应比通知超时更宽松，实际 ${env.voices[0].opts.timeoutMs}`)
+  assert.equal(env.voices[0].opts.timeoutMs, Math.min(60000, Math.max(15000, spoken.length * 400)))
 })
 
 // ---------------------------------------------------------------- 结果通知
@@ -489,11 +627,12 @@ await test('环境检测：一切正常 → ok，且每个必需项都是 ok', a
   assert.equal(result.ok, true)
   assert.equal(result.sent, false)
   assert.equal(result.summary, '环境就绪')
-  for (const key of ['config', 'command', 'app', 'tap', 'vibrate', 'runtime']) {
+  for (const key of ['config', 'command', 'app', 'tap', 'vibrate', 'headsUp', 'runtime']) {
     assert.equal(stepOf(result, key)?.status, 'ok', `${key} 应为 ok：${JSON.stringify(stepOf(result, key))}`)
   }
   assert.match(stepOf(result, 'command').detail, /termux-notification/)
   assert.match(stepOf(result, 'tap').detail, /termux-open-url/)
+  assert.equal(stepOf(result, 'voice').status, 'skip', '语音默认关闭')
 })
 
 await test('环境检测：缺命令或缺应用时给出可执行的修复提示', async () => {
@@ -534,7 +673,7 @@ await test('环境检测：震动那一项说清会怎么振、以及为什么�
   assert.equal(/ -f/.test(stepOf(soft, 'vibrate').detail), false, '不带 -f 时命令行里不应出现 -f')
 
   const off = await makeEnv({ vibrateMs: 0 }).notifier.runEnvironmentCheck()
-  assert.equal(stepOf(off, 'vibrate').status, 'warn')
+  assert.equal(stepOf(off, 'vibrate').status, 'skip', '关闭是合法状态，不该拉响总评')
   assert.match(stepOf(off, 'vibrate').detail, /已关闭/)
 
   const viaNotification = await makeEnv({ vibrateVia: 'notification' }).notifier.runEnvironmentCheck()
@@ -548,6 +687,41 @@ await test('环境检测：震动那一项说清会怎么振、以及为什么�
   const noBin = await makeEnv({}, { vibrateBinFound: false }).notifier.runEnvironmentCheck()
   assert.equal(stepOf(noBin, 'vibrate').status, 'fail')
   assert.match(stepOf(noBin, 'vibrate').hint, /pkg install termux-api/)
+})
+
+await test('环境检测：悬浮通知与语音通知各自给出可执行的提示', async () => {
+  const headsOk = await makeEnv().notifier.runEnvironmentCheck()
+  assert.equal(stepOf(headsOk, 'headsUp').status, 'ok')
+  assert.match(stepOf(headsOk, 'headsUp').detail, /HIGH/)
+
+  const headsOff = await makeEnv({ headsUp: false }).notifier.runEnvironmentCheck()
+  assert.equal(stepOf(headsOff, 'headsUp').status, 'skip')
+
+  const headsNoHelper = await makeEnv({}, { channelHelperFound: false }).notifier.runEnvironmentCheck()
+  assert.equal(stepOf(headsNoHelper, 'headsUp').status, 'fail')
+  assert.match(stepOf(headsNoHelper, 'headsUp').hint, /pkg install termux-api/)
+
+  assert.equal(stepOf(headsOk, 'voice').status, 'skip', '默认关闭')
+  const voiceOn = await makeEnv({ voice: true }).notifier.runEnvironmentCheck()
+  assert.equal(stepOf(voiceOn, 'voice').status, 'ok')
+  assert.match(stepOf(voiceOn, 'voice').detail, /将念出/)
+
+  const voiceNoTts = await makeEnv({ voice: true }, { ttsFound: false }).notifier.runEnvironmentCheck()
+  assert.equal(stepOf(voiceNoTts, 'voice').status, 'fail')
+
+  const voiceNoEngine = await makeEnv({ voice: true }, { enginesMissing: true }).notifier.runEnvironmentCheck()
+  assert.equal(stepOf(voiceNoEngine, 'voice').status, 'warn')
+  assert.match(stepOf(voiceNoEngine, 'voice').hint, /文字转语音/)
+})
+
+await test('环境检测：试发会一并走通悬浮通道与语音播报', async () => {
+  const env = makeEnv({ voice: true })
+  const result = await env.notifier.runEnvironmentCheck({ sendTest: true })
+  assert.equal(stepOf(result, 'send').status, 'ok')
+  assert.equal(env.channels.length, 1, '试发也应先建通道')
+  assert.equal(flagValue(env.calls[0].args, '--channel'), CHANNEL_ID)
+  assert.equal(env.voices.length, 1, '试发也应播报')
+  assert.equal(env.vibrates.length >= 1, true, '试发也应振动')
 })
 
 await test('环境检测：dry-run / 关闭 / command 通道都会如实说明', async () => {

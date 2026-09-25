@@ -65,6 +65,7 @@ window.__ModuleLoader__.load({
       { key: 'vibrateMs', label: '振动', type: 'text', hint: '默认 1000（1 秒）；0 = 不振动；也可写 500,1000,200 这样的 pattern', coerce: 'vibrate' },
       { key: 'vibrateVia', label: '振动方式', type: 'select', options: VIBRATE_VIA, hint: 'termux-api = 调 termux-vibrate（推荐，不受通知渠道设置影响）；notification = 用通知自带的 --vibrate' },
       { key: 'vibrateForce', label: '静音也振动', type: 'switch', hint: '对应 termux-vibrate -f：系统静音/仅振动模式下也振' },
+      { key: 'headsUp', label: '悬浮通知', type: 'switch', hint: '用一个重要性 HIGH 的专用通道，让通知像横幅一样弹出来；关掉则只进通知栏' },
       { key: 'tapUrl', label: '点击通知打开', type: 'text', hint: '默认用系统浏览器打开 DSH 页面；留空则改为打开 Termux 应用', wide: true },
       { key: 'group', label: '通知分组', type: 'text', hint: '同组通知会折叠在一起' },
       { key: 'notificationId', label: '通知 id 前缀', type: 'text', hint: '同类通知用同一个 id 覆盖上一条' },
@@ -72,6 +73,9 @@ window.__ModuleLoader__.load({
 
       { key: 'backend', group: '通道', label: '通道', type: 'select', options: BACKENDS, hint: 'termux = termux-notification；command = 自定义命令' },
       { key: 'command', label: '自定义命令模板', type: 'text', hint: '支持 {title} {content} {tag}，自动 shell 转义', wide: true },
+      { key: 'voice', label: '语音通知', type: 'switch', hint: '额外调 termux-tts-speak 把通知念出来（走 NOTIFICATION 音频流）' },
+      { key: 'voiceTemplate', label: '播报内容模板', type: 'text', hint: '支持 {title} 与 {content}；默认只念标题，避免长摘要在公共场合被念出来', wide: true },
+      { key: 'voiceLanguage', label: '播报语言', type: 'text', hint: '例如 zh / en；留空则由系统 TTS 引擎自行决定' },
       { key: 'dryRun', label: '只写日志（dry-run）', type: 'switch', hint: '不真发通知，用来验证接线' },
       { key: 'appProbe', label: '启动探测 Termux:API 应用', type: 'switch', hint: '缺失时直接停用，避免每次通知都留下挂起的进程' },
       { key: 'execTimeoutMs', label: '发送超时（毫秒）', type: 'number', min: 500, max: 120000, step: 500 },
@@ -372,7 +376,7 @@ window.__ModuleLoader__.load({
 
       return h('div', { style: PAGE_STYLE }, [
         h('h2', { key: 'heading', style: HEADING_STYLE }, TITLE),
-        h('p', { key: 'intro', style: INTRO_STYLE }, '需要你选择、或一轮结果出现时，通过 Termux 给手机发系统通知。点击通知会用系统浏览器打开 DSH 页面，振动走 termux-vibrate。改动立即生效。'),
+        h('p', { key: 'intro', style: INTRO_STYLE }, '需要你选择、或一轮结果出现时，通过 Termux 给手机发系统通知。点击通知会用系统浏览器打开 DSH 页面；振动走 termux-vibrate，可弹悬浮横幅，也能语音播报。改动立即生效。'),
         h(CheckPanel, { key: 'check' }),
         h('section', { key: 'form', style: PANEL_STYLE }, [
           ...rows,
