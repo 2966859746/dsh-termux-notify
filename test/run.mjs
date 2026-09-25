@@ -38,6 +38,7 @@ function esValue(args, key) {
 const VIBRATE_BIN = '/fake/bin/termux-vibrate'
 const TTS_BIN = '/fake/bin/termux-tts-speak'
 const CHANNEL_HELPER = '/fake/libexec/termux-api'
+const REMOVE_BIN = '/fake/bin/termux-notification-remove'
 
 /** 从一个 argv 里读某个 flag 的值。 */
 function flagValue(args, flag) {
@@ -52,6 +53,7 @@ function makeEnv(config = {}, options = {}) {
   const vibrates = []
   const voices = []
   const channels = []
+  const removals = []
   const engines = []
   const order = []
   const logs = []
@@ -72,6 +74,9 @@ function makeEnv(config = {}, options = {}) {
       } else if (file === 'termux-tts-engines') {
         engines.push({ file, args, opts })
         return Promise.resolve(options.enginesMissing ? '' : '[{"name":"com.example.tts","label":"Test TTS","default":true}]')
+      } else if (file === REMOVE_BIN) {
+        removals.push({ file, args, opts })
+        order.push('remove')
       } else if (/libexec\/termux-api$/.test(file)) {
         channels.push({ file, args, opts })
         order.push('channel')
@@ -91,10 +96,11 @@ function makeEnv(config = {}, options = {}) {
     findOpener: () => (options.openerFound === false ? undefined : '/fake/bin/termux-open-url'),
     findVibrateBin: () => (options.vibrateBinFound === false ? undefined : VIBRATE_BIN),
     findTtsBin: () => (options.ttsFound === false ? undefined : TTS_BIN),
+    findRemoveBin: () => (options.removeFound === false ? undefined : REMOVE_BIN),
     channelHelper: () => (options.channelHelperFound === false ? undefined : CHANNEL_HELPER),
     probeApp: () => (options.appInstalled === false ? false : options.appUnknown === true ? undefined : true),
   })
-  return { notifier, calls, vibrates, voices, channels, engines, order, logs, releaseTts: () => releaseTts(), setClock: (value) => { clock = value } }
+  return { notifier, calls, vibrates, voices, channels, removals, engines, order, logs, releaseTts: () => releaseTts(), setClock: (value) => { clock = value } }
 }
 
 const session = { id: 's1', header: { id: 's1' } }
@@ -368,6 +374,80 @@ await test('悬浮通知：通道只建一次（缓存）', async () => {
   assert.equal(env.calls.length, 2)
   assert.equal(env.channels.length, 1, '通道应缓存，不该每条通知都重建')
   assert.equal(flagValue(env.calls[1].args, '--channel'), CHANNEL_ID)
+})
+
+// --------------------------------------------------------------- 清空旧通知
+await test('清空旧通知：新一轮开始时撤销上一轮发过的 tag', async () => {
+  const env = makeEnv({ throttleMs: 0 })
+  env.notifier.onSessionEvent(session, { type: 'turn/start', data: { turn: 1 } })
+  env.notifier.onSessionEvent(session, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+  await tick()
+  const firstTag = flagValue(env.calls[0].args, '--id')
+  assert.equal(env.removals.length, 0, '第一轮开始时还没有可清的')
+
+  env.notifier.onSessionEvent(session, { type: 'turn/start', data: { turn: 2 } })
+  await tick()
+  await tick()
+  assert.deepEqual(env.removals.map((call) => call.args[0]), [firstTag], '只撤自己发过的那条，且用真正发出去的 tag')
+})
+
+await test('清空旧通知：只撤本插件发过的，失败的通知不登记', async () => {
+  const env = makeEnv({ throttleMs: 0 }, { execFails: 'boom' })
+  env.notifier.onSessionEvent(session, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+  await tick()
+  // 发送失败 → 没有 tag 被登记
+  const cleared = await env.notifier.clearPostedNotifications()
+  assert.equal(cleared, 0)
+  assert.equal(env.removals.length, 0)
+})
+
+await test('清空旧通知：子会话的轮次不会清掉主会话的提醒', async () => {
+  const env = makeEnv({ throttleMs: 0 })
+  env.notifier.onSessionEvent(session, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+  await tick()
+  const child = { id: 'c1', header: { id: 'c1', parentSession: 's1' } }
+  env.notifier.onSessionEvent(child, { type: 'turn/start', data: { turn: 1 } })
+  await tick()
+  await tick()
+  assert.equal(env.removals.length, 0, '子 agent 轮次很频繁，不能清掉主会话')
+
+  env.notifier.onSessionEvent(session, { type: 'turn/start', data: { turn: 2 } })
+  await tick()
+  await tick()
+  assert.equal(env.removals.length, 1, '主会话新一轮才清')
+})
+
+await test('清空旧通知：关掉开关就完全不动', async () => {
+  const env = makeEnv({ throttleMs: 0, clearOnNewTurn: false })
+  env.notifier.onSessionEvent(session, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+  await tick()
+  env.notifier.onSessionEvent(session, { type: 'turn/start', data: { turn: 2 } })
+  await tick()
+  await tick()
+  assert.equal(env.removals.length, 0)
+})
+
+await test('清空旧通知：缺 termux-notification-remove 时告警一次且不影响运行', async () => {
+  const env = makeEnv({ throttleMs: 0 }, { removeFound: false })
+  env.notifier.onSessionEvent(session, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+  await tick()
+  env.notifier.onSessionEvent(session, { type: 'turn/start', data: { turn: 2 } })
+  env.notifier.onSessionEvent(session, { type: 'turn/start', data: { turn: 3 } })
+  await tick()
+  await tick()
+  assert.equal(env.removals.length, 0)
+  assert.equal(env.logs.filter((line) => line.includes('termux-notification-remove')).length, 1, '只告警一次')
+})
+
+await test('清空旧通知：手动调用返回撤销条数，清完即空', async () => {
+  const env = makeEnv({ throttleMs: 0, clearOnNewTurn: false })
+  env.notifier.onSessionEvent(session, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+  env.notifier.onSessionEvent(session, { type: 'turn/end', data: { turn: 2, reason: { kind: 'aborted' } } })
+  await tick()
+  assert.equal(env.calls.length, 2)
+  assert.equal(await env.notifier.clearPostedNotifications(), 2)
+  assert.equal(env.removals.length, 2)
+  assert.equal(await env.notifier.clearPostedNotifications(), 0, '清完就没有可撤的了')
 })
 
 // --------------------------------------------------------------- 语音通知
@@ -851,6 +931,34 @@ await test('环境检测：试发会一并走通悬浮通道与语音播报', as
   assert.equal(env.vibrates.length >= 1, true, '试发也应振动')
 })
 
+await test('环境检测：清空旧通知一项说明策略，并在请求时真的执行', async () => {
+  const on = await makeEnv().notifier.runEnvironmentCheck()
+  assert.equal(stepOf(on, 'clear').status, 'ok')
+  assert.match(stepOf(on, 'clear').detail, /每轮开始时/)
+
+  const off = await makeEnv({ clearOnNewTurn: false }).notifier.runEnvironmentCheck()
+  assert.equal(stepOf(off, 'clear').status, 'skip')
+  assert.match(stepOf(off, 'clear').detail, /已关闭/)
+
+  const noBin = await makeEnv({}, { removeFound: false }).notifier.runEnvironmentCheck()
+  assert.equal(stepOf(noBin, 'clear').status, 'warn')
+  assert.match(stepOf(noBin, 'clear').hint, /pkg install termux-api/)
+
+  // clear:true → 真撤一条并报条数
+  const env = makeEnv({ throttleMs: 0 })
+  env.notifier.onSessionEvent(session, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+  await tick()
+  const cleared = await env.notifier.runEnvironmentCheck({ clear: true })
+  assert.equal(stepOf(cleared, 'clear').status, 'ok')
+  assert.match(stepOf(cleared, 'clear').detail, /已撤销 1 条/)
+  assert.equal(env.removals.length, 1)
+
+  // 没有可撤的 → skip
+  const nothing = await makeEnv().notifier.runEnvironmentCheck({ clear: true })
+  assert.equal(stepOf(nothing, 'clear').status, 'skip')
+  assert.match(stepOf(nothing, 'clear').detail, /没有本插件发过的通知/)
+})
+
 await test('环境检测：dry-run / 关闭都会如实说明', async () => {
   const dry = await makeEnv({ dryRun: true }).notifier.runEnvironmentCheck()
   assert.equal(stepOf(dry, 'config').status, 'warn')
@@ -947,6 +1055,13 @@ await test('检测路由：注册 exact 路由，走信任栅栏 + 方法校验 
   const emptyBody = makeRes()
   await routes[0].handler(makeReq({ body: '' }), emptyBody)
   assert.equal(emptyBody.statusCode, 200)
+
+  // clear 动作：响应里应带上清空那一项
+  const clearRes = makeRes()
+  await routes[0].handler(makeReq({ body: JSON.stringify({ clear: true }) }), clearRes)
+  assert.equal(clearRes.statusCode, 200)
+  const clearPayload = JSON.parse(clearRes.body)
+  assert.ok(clearPayload.steps.some((step) => step.key === 'clear'), JSON.stringify(clearPayload.steps))
 })
 
 console.log(`\n${passed} 通过, ${failed} 失败`)

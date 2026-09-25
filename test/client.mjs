@@ -313,15 +313,18 @@ await test('设置页渲染：「全部恢复默认」只清除被覆盖的字�
   assert.deepEqual([...scope.unsets].sort(), ['sound', 'titlePrefix'], '只清除 user 层里存在的字段')
 })
 
-await test('检测面板：两个按钮分别 POST sendTest=false / true', async () => {
+await test('检测面板：三个按钮分别 POST 检测 / 试发 / 清空', async () => {
   const ctx = makeCtx(makeScope(readySnapshot()))
   mod.apply(ctx)
   const { elements } = collect(ctx.registered[0].component())
 
-  const checkButton = elements.find((node) => node.type?.name === 'Button' && node.props.children === '检测环境')
-  const sendButton = elements.find((node) => node.type?.name === 'Button' && node.props.children === '发一条测试通知')
+  const byLabel = (label) => elements.find((node) => node.type?.name === 'Button' && node.props.children === label)
+  const checkButton = byLabel('检测环境')
+  const sendButton = byLabel('发一条测试通知')
+  const clearButton = byLabel('清空旧通知')
   assert.ok(checkButton, '找不到「检测环境」按钮')
   assert.ok(sendButton, '找不到「发一条测试通知」按钮')
+  assert.ok(clearButton, '找不到「清空旧通知」按钮')
 
   checkButton.props.onClick()
   await tick()
@@ -330,13 +333,19 @@ await test('检测面板：两个按钮分别 POST sendTest=false / true', async
   assert.equal(fetchCalls[0].url, mod.__internals.CHECK_PATH)
   assert.equal(fetchCalls[0].init.method, 'POST')
   assert.equal(fetchCalls[0].init.credentials, 'same-origin')
-  assert.deepEqual(JSON.parse(fetchCalls[0].init.body), { sendTest: false })
+  assert.deepEqual(JSON.parse(fetchCalls[0].init.body), {}, '只检测：两个动作都关')
 
   sendButton.props.onClick()
   await tick()
   await tick()
   assert.equal(fetchCalls.length, 2)
   assert.deepEqual(JSON.parse(fetchCalls[1].init.body), { sendTest: true })
+
+  clearButton.props.onClick()
+  await tick()
+  await tick()
+  assert.equal(fetchCalls.length, 3)
+  assert.deepEqual(JSON.parse(fetchCalls[2].init.body), { clear: true })
 })
 
 await test('检测结果渲染：每步的状态/标题/详情/修复提示都出得来', () => {

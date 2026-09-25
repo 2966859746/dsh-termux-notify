@@ -45,7 +45,8 @@
 - **区分优先级**：只有「需要你操作」的才用高优先级 + 悬浮横幅，
   「任务完成」这类非紧急消息不会弹出来打断你。
 
-其余默认行为：**振动 1 秒**、**点通知用浏览器打开 DSH 页面**、通知栏上没有按钮。
+其余默认行为：**振动 1 秒**、**点通知用浏览器打开 DSH 页面**、通知栏上没有按钮，
+以及**新一轮开始时自动清掉上一轮还没点掉的通知**（点过的通知本来就会自动消失）。
 
 ---
 
@@ -129,6 +130,7 @@ node "$HOME/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js" --profile web --dump-c
    点击行为和振动方式，每一项都给出状态和修复提示。
 3. **点「发一条测试通知」**：会真的发一条通知。看到通知后**点它一下**，
    应该用系统浏览器打开 DSH 页面，同时伴随一次振动。
+   旁边还有「清空旧通知」，随时手动清掉本插件之前发过的通知。
 
 三步都通过就装好了。任何一步有 ✗，按提示修即可（提示里会写清楚要执行什么命令）。
 
@@ -165,6 +167,7 @@ bash "$PLUGIN_DIR/scripts/check-integration.sh"
 | 子 agent 轮次也通知 | 关 | 子 agent 的轮次默认不打扰你 |
 | 最短耗时（毫秒） | `0` | 填 `5000` 就只通知耗时 ≥ 5 秒的轮次，过滤掉秒回的小轮次 |
 | 长任务阈值（毫秒） | `60000` | 耗时达到该值的轮次用「✅ 长任务完成」的说法 |
+| 新一轮开始时清空旧通知 | 开 | 清掉上一轮发过、还没点掉的通知。**只撤本插件自己发过的 tag**，不动别的应用；只在根会话的轮次开始触发，子 agent 不会清掉主会话的提醒 |
 | 附带结果摘要 | 开 | 把模型最后一段文本放进通知正文 |
 | 摘要长度（字符） | `120` | 摘要截断长度 |
 | 优先级（需要你操作时） | `high` | `high` / `low` / `max` / `min` / `default`；结果类固定 `default` |
@@ -344,6 +347,10 @@ node "$HOME/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js" plugin --profile web r
   `libexec/termux-api NotificationChannel ... --es priority high` 来建通道。
   另一个坑：给 `--channel` 传一个**不存在的通道 id，通知会被系统直接丢弃** ——
   因此插件先确认通道建好，建不成就退回默认通道，绝不引用不确定存在的通道。
+- **清空旧通知**：`termux-notification-remove <tag>` 就是 `manager.cancel(tag, 0)`，
+  没有批量接口，所以插件**记下自己发过的每个 tag**（含悬浮通知用的全新 tag），
+  在新一轮的 `turn/start` 上逐个撤销 —— 只撤销本插件自己的，不碰系统或别的应用的通知。
+  子 agent 会话的轮次很频繁，因此那里不触发（否则主会话的提醒会被子会话清掉）。
 - **语速/音调必须显式传**：Termux:API 每次都会 `setSpeechRate`/`setPitch`，缺省 1.0，
   所以「不传」不是「跟随系统」而是静默变成 1.0；插件显式传 `-r`/`-p`，让它由设置项决定。
 - **语音通知**：`termux-tts-speak` 会**阻塞到播完**才返回，所以它的超时按文本长度自适应
@@ -368,7 +375,7 @@ git clone https://github.com/2966859746/dsh-termux-notify
 cd dsh-termux-notify
 
 npm test          # 三套一起跑
-node test/run.mjs         # 46 项宿主：配置、场景内容、工具名映射、argv 组装、节流、停用、真实超时与进程组清理、悬浮通道与 tag、语音播报、环境检测
+node test/run.mjs         # 53 项宿主：配置、场景内容、工具名映射、argv 组装、节流、停用、真实超时与进程组清理、悬浮通道与 tag、语音播报、环境检测
 node test/integration.mjs # 用真实 cordis 加载插件，验证 waterfall 委托与 agent scope 派发
 node test/client.mjs      # 假浏览器 + 迷你 React 加载 client bundle，验证设置页渲染与写入
 ```

@@ -32,6 +32,7 @@
         includeSnippet: true        # 结果类通知附上模型最后一段文本
         snippetChars: 120
         longTurnMs: 60000           # 耗时达到该值用「✅ 长任务完成」的说法
+        clearOnNewTurn: true        # 新一轮开始时撤销上一轮发过的、还没点掉的通知
 
         # —— 通知外观 ——
         priority: high              # 「需要你操作」时的优先级（结果类固定 default）

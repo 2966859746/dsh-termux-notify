@@ -55,6 +55,7 @@ window.__ModuleLoader__.load({
       { key: 'notifyChildSessions', label: '子 agent 轮次也通知', type: 'switch', hint: '默认关，避免刷屏' },
       { key: 'minTurnDurationMs', label: '最短耗时（毫秒）', type: 'number', min: 0, step: 1000, hint: '耗时更短的轮次不通知；0 = 每轮都通知' },
       { key: 'longTurnMs', label: '长任务阈值（毫秒）', type: 'number', min: 1000, step: 1000, hint: '耗时达到该值的轮次用「✅ 长任务完成」的说法' },
+      { key: 'clearOnNewTurn', label: '新一轮开始时清空旧通知', type: 'switch', hint: '清掉上一轮发过、还没点掉的通知（只撤本插件自己的，不动别的应用）' },
 
       { key: 'includeSnippet', label: '附带结果摘要', type: 'switch', hint: '把模型最后一段文本放进通知正文' },
       { key: 'snippetChars', label: '摘要长度（字符）', type: 'number', min: 20, max: 2000, step: 20 },
@@ -255,7 +256,7 @@ window.__ModuleLoader__.load({
       const [result, setResult] = React.useState(null)
       const [error, setError] = React.useState('')
 
-      const run = (sendTest) => {
+      const run = (payload) => {
         if (checking) return
         setChecking(true)
         setError('')
@@ -263,7 +264,7 @@ window.__ModuleLoader__.load({
           method: 'POST',
           credentials: 'same-origin',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ sendTest }),
+          body: JSON.stringify(payload),
         }).then(
           async (response) => {
             const payload = await response.json().catch(() => undefined)
@@ -282,10 +283,11 @@ window.__ModuleLoader__.load({
 
       return h('section', { style: PANEL_STYLE }, [
         h('h3', { key: 'title', style: PANEL_TITLE_STYLE }, '环境检测'),
-        h('p', { key: 'help', style: NOTE_STYLE }, '检测插件开关、termux-notification 命令、Termux:API 应用和点击行为；「发一条测试通知」会真的发一条，是唯一能证明通道可用的检查。'),
+        h('p', { key: 'help', style: NOTE_STYLE }, '检测插件开关、命令、Termux:API 应用、点击行为、悬浮与语音；「发一条测试通知」会真的发一条，「清空旧通知」会撤销本插件之前发过的通知。'),
         h('div', { key: 'buttons', style: BUTTONS_STYLE }, [
-          h(Button, { key: 'check', size: 'sm', variant: 'primary', disabled: checking, onClick: () => run(false) }, checking ? '检测中…' : '检测环境'),
-          h(Button, { key: 'send', size: 'sm', variant: 'outline', disabled: checking, onClick: () => run(true) }, '发一条测试通知'),
+          h(Button, { key: 'check', size: 'sm', variant: 'primary', disabled: checking, onClick: () => run({}) }, checking ? '检测中…' : '检测环境'),
+          h(Button, { key: 'send', size: 'sm', variant: 'outline', disabled: checking, onClick: () => run({ sendTest: true }) }, '发一条测试通知'),
+          h(Button, { key: 'clear', size: 'sm', variant: 'ghost', disabled: checking, onClick: () => run({ clear: true }) }, '清空旧通知'),
         ]),
         h(CheckResultList, { key: 'result', result, error }),
       ])
