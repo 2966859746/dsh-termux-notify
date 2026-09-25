@@ -1,0 +1,59 @@
+# ============================================================================
+# dsh-termux-notify —— DSH bundle patch（挂载声明）
+# ============================================================================
+# 这是插件的“挂载声明”。DSH 启动时按 bundle 层栈叠加各插件 patch，本文件把本插件
+# 插入 Web profile 的配置树。
+#
+# 安装（推荐）：
+#   dsh plugin --profile web add link:/data/data/com.termux/files/home/dsh/plugins/dsh-termux-notify
+# 然后确认 web profile 的 package.json 里 dsh.profile.bundles 含有 "dsh-termux-notify"。
+#
+# 覆盖配置：在 ~/.dsh/profiles/web/cordis.patch.yml（用户层）里按 id 追加一行。
+# 注意：patch 是「整份 config 替换」而不是合并，所以覆盖时请把想保留的键一并写出；
+# 未写出的键会由插件内部的默认值补齐。
+# ============================================================================
+
+- insert:
+    - id: dsh-termux-notify
+      name: dsh-termux-notify
+      config:
+        # —— 总开关与触发点 ——
+        enabled: true
+        notifyOnQuestion: true      # ask_user_question / 计划审阅等“需要你选择”
+        notifyOnApproval: true      # 敏感工具的一次性授权请求
+        notifyOnTurnEnd: true       # 一轮结束、结果出现
+
+        # —— 噪声控制 ——
+        notifyChildSessions: false  # 子 agent 会话的轮次结束不通知
+        minTurnDurationMs: 0        # 只通知耗时 >= 该值的轮次（0 = 每轮都通知）
+        throttleMs: 1500            # 同内容 1.5s 内只发一次
+
+        # —— 内容 ——
+        titlePrefix: DSH
+        includeSnippet: true        # 附上模型最后一段文本
+        snippetChars: 120
+
+        # —— 通知外观 ——
+        priority: high              # high / low / max / min / default
+        sound: true
+        vibrateMs: 1000             # 默认振动 1 秒；0 = 不振动；也可写 "500,1000,200"
+        # 振动方式：termux-api = 额外调 `termux-vibrate -d <ms>`，直接走系统 Vibrator，
+        # 不受通知渠道设置影响（通知自带的 --vibrate 在 Android 8+ 上常被渠道设置忽略）。
+        # notification = 只用 termux-notification 的 --vibrate（pattern 只能走这条）。
+        vibrateVia: termux-api
+        vibrateForce: true          # termux-vibrate -f：系统静音/仅振动模式下也振
+        group: dsh
+        notificationId: dsh
+
+        # —— 点击通知打开系统浏览器进 DSH 页面（推荐保持开启）——
+        # 通知只负责提醒，真正的操作回浏览器里做；通知栏上的操作太容易误触。
+        # 留空则恢复 termux-notification 的默认行为：点开 Termux 应用。
+        tapUrl: 'http://127.0.0.1:3080/'
+
+        # —— 通道与排障 ——
+        backend: termux             # termux | command
+        # command: 'curl -s -d "{content}" https://ntfy.sh/你的主题'   # backend=command 时使用
+        appProbe: true              # 启动时探测 Termux:API 应用，缺失则直接停用（否则会挂起）
+        disableAfterFailures: 3
+        execTimeoutMs: 8000
+        dryRun: false               # true = 只写日志，便于验证逻辑

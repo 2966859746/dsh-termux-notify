@@ -1,0 +1,41 @@
+{
+  "name": "dsh-termux-notify",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DSH 插件：需要用户选择、或一轮结果出现时，通过 Termux 给手机发送系统通知；内置设置页与环境自检",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "termux",
+    "notification"
+  ],
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "client",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "test": "node test/run.mjs && node test/integration.mjs && node test/client.mjs"
+  },
+  "license": "MIT"
+}
