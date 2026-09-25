@@ -88,7 +88,7 @@
 在 DSH 的对话框里粘上这一行，然后说一句「帮我安装这个插件」：
 
 ```
-https://github.com/2966859746/dsh-termux-notify
+https://github.com/xs2966/dsh-termux-notify
 ```
 
 DSH 会自己去看这个仓库、把它装进 `web` profile、并告诉你需要重启。你只需要在最后重启一次 DSH。
@@ -103,10 +103,10 @@ DSH 会自己去看这个仓库、把它装进 `web` profile、并告诉你需�
 
 ```bash
 # 如果 dsh 在 PATH 里
-dsh plugin --profile web add github:2966859746/dsh-termux-notify
+dsh plugin --profile web add github:xs2966/dsh-termux-notify
 
 # Termux 上一般要显式用 node 启动（node_modules/.bin/dsh 的 shebang 在本机不可用）
-node "$HOME/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js" plugin --profile web add github:2966859746/dsh-termux-notify
+node "$HOME/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js" plugin --profile web add github:xs2966/dsh-termux-notify
 ```
 
 这条命令会把这个包写进 `$HOME/.dsh/profiles/web/package.json` 的依赖和 `dsh.profile.bundles`。
@@ -371,7 +371,7 @@ node "$HOME/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js" plugin --profile web r
 **不需要 tsdown/vite 构建**，改完刷新页面即可。
 
 ```bash
-git clone https://github.com/2966859746/dsh-termux-notify
+git clone https://github.com/xs2966/dsh-termux-notify
 cd dsh-termux-notify
 
 npm test          # 三套一起跑
