@@ -29,9 +29,9 @@
         throttleMs: 1500            # 同内容 1.5s 内只发一次
 
         # —— 内容 ——
-        titlePrefix: DSH
-        includeSnippet: true        # 附上模型最后一段文本
+        includeSnippet: true        # 结果类通知附上模型最后一段文本
         snippetChars: 120
+        longTurnMs: 60000           # 耗时达到该值用「✅ 长任务完成」的说法
 
         # —— 通知外观 ——
         priority: high              # high / low / max / min / default
@@ -41,6 +41,9 @@
         # 不受通知渠道设置影响（通知自带的 --vibrate 在 Android 8+ 上常被渠道设置忽略）。
         # notification = 只用 termux-notification 的 --vibrate（pattern 只能走这条）。
         vibrateVia: termux-api
+        # 悬浮通道 id：换一个新值（如 dsh-heads-up2）可建一个未被改过设置的全新通道，
+        # 用于修复「重要性被系统/用户调低过」导致不弹横幅的旧通道。
+        headsUpChannel: dsh-heads-up
         vibrateForce: true          # termux-vibrate -f：系统静音/仅振动模式下也振
         group: dsh
         notificationId: dsh

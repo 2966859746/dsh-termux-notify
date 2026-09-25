@@ -290,8 +290,8 @@ await test('设置页渲染：文本框控件按字段类型取参数', () => {
   assert.ok(input, '找不到「摘要长度」输入框')
   assert.equal(input.props.type, 'number')
   assert.equal(input.props.value, String(DEFAULTS.snippetChars))
-  const text = elements.find((node) => node.type?.name === 'Input' && node.props.value === String(DEFAULTS.titlePrefix))
-  assert.ok(text, '找不到「标题前缀」输入框')
+  const text = elements.find((node) => node.type?.name === 'Input' && node.props.value === String(DEFAULTS.headsUpChannel))
+  assert.ok(text, '找不到「悬浮通道」输入框')
   assert.equal(text.props.type, 'text')
 })
 

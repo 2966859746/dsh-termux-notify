@@ -89,7 +89,7 @@ await test('审批 waterfall 同样被观测到', async () => {
   await tick()
   assert.equal(answer, 'unavailable')
   assert.equal(delegated, 1)
-  assert.ok(text().includes('需要授权'), text())
+  assert.ok(text().includes('⚠️ 需要确认'), text())
   assert.ok(text().includes('越界写入'), text())
 })
 
@@ -103,7 +103,7 @@ await test('session/event 事件流：turn/end 触发结果通知', async () => 
   })
   ctx.emit('session/event', session, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
   await tick()
-  assert.ok(text().includes('回复完成'), text())
+  assert.ok(text().includes('✅ 任务完成'), text())
   assert.ok(text().includes('集成测试会话'), text())
   assert.ok(text().includes('集成测试的结果摘要'), text())
 })

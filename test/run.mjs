@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict'
 import { execSync } from 'node:child_process'
-import { apply, createNotifier, defaultExec, normalizeConfig, CHANNEL_ID, CHANNEL_NAME, CHECK_ROUTE_PATH, DEFAULTS, SETTINGS_NAMESPACE, SettingsSchema } from '../lib/index.js'
+import { apply, createNotifier, defaultExec, normalizeConfig, toolLabel, CHANNEL_ID, CHANNEL_NAME, CHECK_ROUTE_PATH, DEFAULTS, SETTINGS_NAMESPACE, SettingsSchema } from '../lib/index.js'
 
 let passed = 0
 let failed = 0
@@ -55,6 +55,7 @@ function makeEnv(config = {}, options = {}) {
   const engines = []
   const order = []
   const logs = []
+  let releaseTts = () => {}
   let clock = 1_000_000
   const notifier = createNotifier(config, {
     exec: (file, args, opts) => {
@@ -64,6 +65,10 @@ function makeEnv(config = {}, options = {}) {
       } else if (file === TTS_BIN) {
         voices.push({ file, args, opts })
         order.push('voice')
+        // ttsSlow：挂住不返回，用来验证「上一条还在念时跳过新的」
+        if (options.ttsSlow) return new Promise((resolve) => { releaseTts = resolve })
+        // ttsFails：模拟引擎卡住被超时杀掉
+        if (options.ttsFails) return Promise.reject(new Error('termux-tts-speak 在 30000ms 内没有返回'))
       } else if (file === 'termux-tts-engines') {
         engines.push({ file, args, opts })
         return Promise.resolve(options.enginesMissing ? '' : '[{"name":"com.example.tts","label":"Test TTS","default":true}]')
@@ -89,7 +94,7 @@ function makeEnv(config = {}, options = {}) {
     channelHelper: () => (options.channelHelperFound === false ? undefined : CHANNEL_HELPER),
     probeApp: () => (options.appInstalled === false ? false : options.appUnknown === true ? undefined : true),
   })
-  return { notifier, calls, vibrates, voices, channels, engines, order, logs, setClock: (value) => { clock = value } }
+  return { notifier, calls, vibrates, voices, channels, engines, order, logs, releaseTts: () => releaseTts(), setClock: (value) => { clock = value } }
 }
 
 const session = { id: 's1', header: { id: 's1' } }
@@ -160,11 +165,11 @@ await test('提问：发出通知并且把 next() 的结果原样透传', async 
 
   assert.equal(calls.length, 1)
   assert.equal(calls[0].file, '/fake/bin/termux-notification')
-  assert.equal(flagValue(calls[0].args, '--title'), 'DSH · 需要你选择')
-  assert.equal(flagValue(calls[0].args, '--id'), 'dsh-question')
+  assert.equal(flagValue(calls[0].args, '--title'), '❓ 需要选择')
+  assert.ok(flagValue(calls[0].args, '--id').startsWith('dsh-question-'), '需要你操作的用全新 tag，才会弹横幅')
   const content = flagValue(calls[0].args, '--content')
   assert.ok(content.includes('选模式：要用哪种模式？'), content)
-  assert.ok(content.includes('快速 (Recommended) / 完整'), content)
+  assert.ok(content.includes('选项：快速 (Recommended) / 完整'), content)
   assert.ok(calls[0].args.includes('--sound'), '默认带提示音')
   assert.equal(flagValue(calls[0].args, '--priority'), 'high')
   assert.equal(calls[0].args.includes('--vibrate'), false, '默认不走通知的 --vibrate')
@@ -243,11 +248,33 @@ await test('审批：通知里带工具名与原因，并委托下游', async ()
   const answer = notifier.onApproval({ agent: {}, toolName: 'bash', reason: '需要写入工作区之外' }, () => 'allowed-once')
   assert.equal(answer, 'allowed-once')
   await tick()
-  assert.equal(flagValue(calls[0].args, '--title'), 'DSH · 需要授权')
-  assert.equal(flagValue(calls[0].args, '--id'), 'dsh-approval')
+  assert.equal(flagValue(calls[0].args, '--title'), '⚠️ 需要确认')
+  assert.ok(flagValue(calls[0].args, '--id').startsWith('dsh-approval-'))
   const content = flagValue(calls[0].args, '--content')
-  assert.ok(content.includes('bash'), content)
+  assert.ok(content.includes('工具：命令行'), `bash 应映射成中文口语：${content}`)
   assert.ok(content.includes('需要写入工作区之外'), content)
+})
+
+await test('审批：没有工具信息时按权限请求呈现', async () => {
+  const { notifier, calls } = makeEnv()
+  notifier.onApproval({ agent: {}, reason: '访问工作区之外的文件' }, () => 'unavailable')
+  await tick()
+  assert.equal(flagValue(calls[0].args, '--title'), '🔐 权限请求')
+  assert.equal(flagValue(calls[0].args, '--content'), '访问工作区之外的文件')
+  assert.ok(flagValue(calls[0].args, '--id').startsWith('dsh-permission-'))
+})
+
+await test('工具名映射：英文工具名转中文口语，映射不到就原样保留', () => {
+  assert.equal(toolLabel('bash'), '命令行')
+  assert.equal(toolLabel('Bash'), '命令行', '大小写不敏感')
+  assert.equal(toolLabel('str_replace_editor'), '编辑文件')
+  assert.equal(toolLabel('str-replace-editor'), '编辑文件')
+  assert.equal(toolLabel('read'), '读取文件')
+  assert.equal(toolLabel('web_search'), '网络搜索')
+  assert.equal(toolLabel('mcp__foo__bash'), '命令行', '带包装的名字取最后一段再映射')
+  assert.equal(toolLabel('MyCustomTool'), 'MyCustomTool', '映射不到就原样用')
+  assert.equal(toolLabel(''), '工具')
+  assert.equal(toolLabel(undefined), '工具')
 })
 
 // --------------------------------------------------------------- 悬浮通知
@@ -304,6 +331,35 @@ await test('悬浮通知：通道建不成时退回默认通道（绝不引用�
   assert.ok(fails.logs.some((line) => line.includes('创建悬浮通知通道失败')))
 })
 
+await test('优先级分层：需要你操作用 high+悬浮通道，结果类用 default 且不弹横幅', async () => {
+  const env = makeEnv({ throttleMs: 0 })
+  env.notifier.onQuestion({ questions: [{ id: 'q', question: 'q' }] }, () => 'A')
+  await tick()
+  assert.equal(flagValue(env.calls[0].args, '--priority'), 'high', '需要你操作 → 高优先级')
+  assert.equal(flagValue(env.calls[0].args, '--channel'), CHANNEL_ID)
+  assert.equal(env.calls[0].args.includes('--group'), false, '悬浮时不分组：分组在不少 ROM 上会抑制横幅')
+
+  env.notifier.onSessionEvent(session, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+  await tick()
+  assert.equal(flagValue(env.calls[1].args, '--priority'), 'default', '结果类 → 默认优先级')
+  assert.equal(env.calls[1].args.includes('--channel'), false, '结果类不弹横幅、不打断')
+  assert.equal(flagValue(env.calls[1].args, '--group'), 'dsh', '结果类仍按分组折叠')
+})
+
+await test('悬浮通知：需要你操作的每次都换新 tag；悬浮通道 id 可配置', async () => {
+  const env = makeEnv({ throttleMs: 0, headsUpChannel: 'dsh-heads-up2' })
+  env.notifier.onQuestion({ questions: [{ id: 'q1', question: 'q1' }] }, () => 'A')
+  await tick()
+  env.notifier.onQuestion({ questions: [{ id: 'q2', question: 'q2' }] }, () => 'A')
+  await tick()
+  const first = flagValue(env.calls[0].args, '--id')
+  const second = flagValue(env.calls[1].args, '--id')
+  assert.ok(first.startsWith('dsh-question-') && second.startsWith('dsh-question-'))
+  assert.notEqual(first, second, '同 tag 重发会被当成更新，Android 不再弹横幅')
+  assert.equal(esValue(env.channels[0].args, 'id'), 'dsh-heads-up2', '通道 id 用配置值')
+  assert.equal(flagValue(env.calls[0].args, '--channel'), 'dsh-heads-up2')
+})
+
 await test('悬浮通知：通道只建一次（缓存）', async () => {
   const env = makeEnv({ throttleMs: 0 })
   env.notifier.onQuestion({ questions: [{ id: 'q1', question: 'q1' }] }, () => 'A')
@@ -326,12 +382,12 @@ await test('语音通知：默认关闭；打开后按模板调 termux-tts-speak
   on.notifier.onQuestion({ questions: [{ id: 'q', header: '选模式', question: '要用哪种模式？' }] }, () => 'A')
   await tick()
   assert.equal(on.voices.length, 1)
-  assert.deepEqual(on.voices[0].args, ['DSH · 需要你选择'], '默认模板只念标题')
+  assert.deepEqual(on.voices[0].args, ['需要你选择，选模式：要用哪种模式？'], '默认念场景短句（动作 + 对象）')
 
   const lang = makeEnv({ voice: true, voiceLanguage: 'zh' })
   lang.notifier.onQuestion({ questions: [{ id: 'q', question: 'q' }] }, () => 'A')
   await tick()
-  assert.deepEqual(lang.voices[0].args, ['-l', 'zh', 'DSH · 需要你选择'])
+  assert.deepEqual(lang.voices[0].args, ['-l', 'zh', '需要你选择，q'])
 
   const tpl = makeEnv({ voice: true, voiceTemplate: '{title}。{content}' })
   tpl.notifier.onQuestion({ questions: [{ id: 'q', question: '要用哪种模式？' }] }, () => 'A')
@@ -346,13 +402,50 @@ await test('语音通知：默认关闭；打开后按模板调 termux-tts-speak
   assert.ok(noTts.logs.some((line) => line.includes('找不到 termux-tts-speak')), noTts.logs.join('\n'))
 })
 
+await test('语音通知：上一条还在念时跳过新的，避免排队堆积', async () => {
+  const env = makeEnv({ voice: true, throttleMs: 0 }, { ttsSlow: true })
+  env.notifier.onQuestion({ questions: [{ id: 'q1', question: 'q1' }] }, () => 'A')
+  await tick()
+  assert.equal(env.voices.length, 1, '第一条开始念')
+  env.notifier.onQuestion({ questions: [{ id: 'q2', question: 'q2' }] }, () => 'A')
+  await tick()
+  assert.equal(env.voices.length, 1, '上一条还在念，第二条应被跳过而不是排队')
+  assert.equal(env.calls.length, 2, '但通知照发')
+  env.releaseTts()
+  await tick()
+  env.notifier.onQuestion({ questions: [{ id: 'q3', question: 'q3' }] }, () => 'A')
+  await tick()
+  assert.equal(env.voices.length, 2, '上一条念完后可以再念')
+})
+
+await test('语音通知：命令缺失时直接跳过并告警', async () => {
+  const env = makeEnv({ voice: true, throttleMs: 0 }, { ttsFound: false })
+  env.notifier.onQuestion({ questions: [{ id: 'q1', question: 'q1' }] }, () => 'A')
+  await tick()
+  assert.equal(env.voices.length, 0, 'tts 命令找不到时压根不该调用')
+  assert.equal(env.calls.length, 1, '通知照常发出')
+  assert.ok(env.logs.some((line) => line.includes('找不到 termux-tts-speak')), env.logs.join('\n'))
+})
+
+await test('语音通知：引擎卡住连续失败到阈值后就停用播报，不再反复挂进程', async () => {
+  const env = makeEnv({ voice: true, throttleMs: 0, disableAfterFailures: 2 }, { ttsFails: true })
+  for (const id of ['q1', 'q2', 'q3', 'q4']) {
+    env.notifier.onQuestion({ questions: [{ id, question: id }] }, () => 'A')
+    await tick()
+  }
+  assert.equal(env.voices.length, 2, '第 3 次起不再尝试播报')
+  assert.equal(env.calls.length, 4, '通知一直照常发出')
+  assert.ok(env.logs.some((line) => line.includes('已停止播报')), env.logs.join('\n'))
+  assert.ok(env.logs.some((line) => line.includes('TTS 引擎卡住了')), env.logs.join('\n'))
+})
+
 await test('语音通知：超时按文本长度自适应（TTS 会阻塞到播完）', async () => {
   const env = makeEnv({ voice: true, voiceTemplate: '{content}', execTimeoutMs: 8000 })
   env.notifier.onQuestion({ questions: [{ id: 'q', question: 'x'.repeat(200) }] }, () => 'A')
   await tick()
   const spoken = env.voices[0].args[env.voices[0].args.length - 1]
   assert.ok(env.voices[0].opts.timeoutMs > 8000, `TTS 超时应比通知超时更宽松，实际 ${env.voices[0].opts.timeoutMs}`)
-  assert.equal(env.voices[0].opts.timeoutMs, Math.min(60000, Math.max(15000, spoken.length * 400)))
+  assert.equal(env.voices[0].opts.timeoutMs, Math.min(90000, Math.max(30000, spoken.length * 600)))
 })
 
 // ---------------------------------------------------------------- 结果通知
@@ -370,13 +463,38 @@ await test('结果：turn/end 通知带会话标题、摘要与耗时', async ()
   await tick()
 
   assert.equal(calls.length, 1)
-  assert.equal(flagValue(calls[0].args, '--title'), 'DSH · 回复完成')
-  assert.equal(flagValue(calls[0].args, '--id'), 'dsh-turn')
-  const content = flagValue(calls[0].args, '--content')
-  const lines = content.split('\n')
-  assert.equal(lines[0], '修复登录超时')
-  assert.equal(lines[1], '已经修好了。 改动在 auth.ts。', '摘要应折叠换行')
-  assert.equal(lines[2], '用时 42s')
+  assert.equal(flagValue(calls[0].args, '--title'), '✅ 任务完成')
+  assert.equal(flagValue(calls[0].args, '--id'), 'dsh-turn', '结果类沿用固定 tag（覆盖上一条）')
+  assert.equal(flagValue(calls[0].args, '--priority'), 'default', '结果类不弹横幅、不打断')
+  const lines = flagValue(calls[0].args, '--content').split('\n')
+  assert.equal(lines[0], '本轮对话已结束')
+  assert.equal(lines[1], '修复登录超时')
+  assert.equal(lines[2], '已经修好了。 改动在 auth.ts。', '摘要应折叠换行')
+})
+
+await test('结果：耗时超过长任务阈值就用「长任务完成」', async () => {
+  const { notifier, calls, setClock } = makeEnv({ longTurnMs: 30000 })
+  setClock(0)
+  notifier.onSessionEvent(session, { type: 'turn/start', data: { turn: 1 } })
+  setClock(90_000)
+  notifier.onSessionEvent(session, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+  await tick()
+  assert.equal(flagValue(calls[0].args, '--title'), '✅ 长任务完成')
+  assert.match(flagValue(calls[0].args, '--content'), /^耗时 1m30s/)
+})
+
+await test('结果：中止/被阻止/达到上限各有对应说法', async () => {
+  for (const [kind, title, speech] of [
+    ['aborted', '⏹ 已中止', '任务已中止'],
+    ['blocked', '⏹ 已阻止', '任务已阻止'],
+    ['max-tokens', '⚠️ 达到上限', '任务达到上限'],
+  ]) {
+    const { notifier, calls, voices } = makeEnv({ voice: true, throttleMs: 0 })
+    notifier.onSessionEvent(session, { type: 'turn/end', data: { turn: 1, reason: { kind } } })
+    await tick()
+    assert.equal(flagValue(calls[0].args, '--title'), title, kind)
+    assert.equal(voices[0].args[0], speech, kind)
+  }
 })
 
 await test('结果：error 轮次标题不同且带错误信息', async () => {
@@ -384,8 +502,8 @@ await test('结果：error 轮次标题不同且带错误信息', async () => {
   notifier.onSessionEvent(session, { type: 'turn/start', data: { turn: 2 } })
   notifier.onSessionEvent(session, { type: 'turn/end', data: { turn: 2, reason: { kind: 'error', error: { message: 'rate limited' } } } })
   await tick()
-  assert.equal(flagValue(calls[0].args, '--title'), 'DSH · 执行出错')
-  assert.ok(flagValue(calls[0].args, '--content').includes('rate limited'))
+  assert.equal(flagValue(calls[0].args, '--title'), '❌ 出错了')
+  assert.equal(flagValue(calls[0].args, '--content'), 'rate limited', '正文直接放错误摘要')
 })
 
 await test('结果：子 agent 会话默认不通知，打开开关后通知', async () => {
@@ -549,27 +667,28 @@ await test('apply：接入设置命名空间，改动即时生效（无需重启
     },
   }
 
-  apply(ctx, { dryRun: true })
+  // throttleMs=0：这条用例连发两次同样的通知来对比配置，别被去重拦掉
+  apply(ctx, { dryRun: true, throttleMs: 0 })
   assert.equal(installs.length, 1, '必须注册一个设置命名空间')
   const [owner, ns, schema, entry, settingsHooks] = installs[0]
   assert.equal(owner, ctx)
   assert.equal(ns, SETTINGS_NAMESPACE)
   assert.equal(schema, SettingsSchema)
-  assert.deepEqual(entry, { dryRun: true }, '组合配置作为 base 传入')
+  assert.deepEqual(entry, { dryRun: true, throttleMs: 0 }, '组合配置作为 base 传入')
 
   // 设置服务解析出新的用户配置
-  settingsHooks.setSource(() => ({ ...DEFAULTS, dryRun: true, titlePrefix: '来自设置页' }))
+  settingsHooks.setSource(() => ({ ...DEFAULTS, dryRun: true, voiceTemplate: '设置页改过：{speech}' }))
   hooks.get('user-questions/request')[0]({ questions: [{ id: 'q', question: '要选吗' }] }, () => 'NEXT')
   await tick()
-  assert.ok(logs.some((line) => line.includes('来自设置页 · 需要你选择')), `改动没有生效：\n${logs.join('\n')}`)
+  assert.ok(logs.some((line) => line.includes('语音「设置页改过：需要你选择，要选吗」')), `改动没有生效：\n${logs.join('\n')}`)
 
   // 服务消失时回退组合配置
-  settingsHooks.setSource(() => ({ ...DEFAULTS, dryRun: true }))
+  settingsHooks.setSource(() => ({ ...DEFAULTS, dryRun: true, throttleMs: 0 }))
   settingsHooks.onChange()
   logs.length = 0
   hooks.get('user-questions/request')[0]({ questions: [{ id: 'q', question: '要选吗' }] }, () => 'NEXT')
   await tick()
-  assert.ok(logs.some((line) => line.includes('DSH · 需要你选择')), `没有回退组合配置：\n${logs.join('\n')}`)
+  assert.ok(logs.some((line) => line.includes('语音「需要你选择，要选吗」')), `没有回退组合配置：\n${logs.join('\n')}`)
 })
 
 // ------------------------------------------------------------------ apply 接线
@@ -614,7 +733,7 @@ await test('apply：注册三个观测点，提问监听器 prepend 且仍会委
   fire({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '完成了' }] } } })
   fire({ type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
   await tick()
-  assert.ok(logs.some((line) => line.includes('回复完成')), logs.join('\n'))
+  assert.ok(logs.some((line) => line.includes('✅ 任务完成')), logs.join('\n'))
   assert.ok(logs.some((line) => line.includes('完成了')), logs.join('\n'))
 })
 
@@ -749,8 +868,8 @@ await test('环境检测：试发成功会复位“已停用”，失败则报�
   assert.equal(result.sent, true)
   assert.equal(result.summary, '通道可用，通知已经发出')
   assert.equal(ok.notifier.state.degraded, false, '试发成功应解除停用（装好 APK 后不必重启）')
-  assert.equal(flagValue(ok.calls[0].args, '--id'), 'dsh-test', '测试通知用独立 id')
-  assert.match(flagValue(ok.calls[0].args, '--title'), /环境检测/)
+  assert.ok(flagValue(ok.calls[0].args, '--id').startsWith('dsh-test-'), '测试通知每次用全新 tag，保证弹横幅')
+  assert.equal(flagValue(ok.calls[0].args, '--title'), '🔔 测试通知')
 
   const bad = await makeEnv({}, { execFails: '在 8000ms 内没有返回' })
   const failed = await bad.notifier.runEnvironmentCheck({ sendTest: true })
