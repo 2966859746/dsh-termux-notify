@@ -70,15 +70,22 @@ fi
 # ---- 4) 测试 ----
 echo
 echo "[4/4] 测试套件"
-for suite in run integration client; do
-  if out=$(cd "$PLUGIN_DIR" && node "test/$suite.mjs" 2>&1); then
-    ok "test/$suite.mjs — $(printf '%s' "$out" | grep -E '^[0-9]+ 通过' | tail -1)"
-  else
-    bad "test/$suite.mjs 失败"
-    printf '%s\n' "$out" | tail -20
-    fail=1
-  fi
-done
+if [ ! -f "$PLUGIN_DIR/test/run.mjs" ]; then
+  # 从 GitHub / npm 安装的副本不带 test/（package.json 的 files 只发布运行时需要的部分），
+  # 这不是故障：上面 1-3 步已经验证了真正决定装不装得上的接线。
+  info "这一份是安装副本，未包含 test/ —— 跳过测试套件"
+  info "想跑完整测试，请 git clone 仓库后在仓库目录执行 npm test"
+else
+  for suite in run integration client; do
+    if out=$(cd "$PLUGIN_DIR" && node "test/$suite.mjs" 2>&1); then
+      ok "test/$suite.mjs — $(printf '%s' "$out" | grep -E '^[0-9]+ 通过' | tail -1)"
+    else
+      bad "test/$suite.mjs 失败"
+      printf '%s\n' "$out" | tail -20
+      fail=1
+    fi
+  done
+fi
 
 echo
 if [ "$fail" -eq 0 ]; then

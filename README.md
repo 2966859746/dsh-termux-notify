@@ -110,12 +110,16 @@ node "$HOME/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js" --profile web --dump-c
 
 三步都通过就装好了。任何一步有 ✗，按提示修即可（提示里会写清楚要执行什么命令）。
 
-想更彻底地验证，可以跑一次完整自检（会检查 profile 组合、宿主/客户端接线并跑全部测试）：
+想更彻底地验证，可以跑一次完整自检 —— 它会检查 profile 组合、宿主半侧能否按包名 import、
+客户端 bundle 能否被发现，以及（在源码仓库里）跑全部测试：
 
 ```bash
 PLUGIN_DIR="$HOME/.dsh/profiles/web/node_modules/dsh-termux-notify"
 bash "$PLUGIN_DIR/scripts/check-integration.sh"
 ```
+
+> 安装副本里没有 `test/`，所以最后一步会提示「跳过测试套件」——这是正常的，
+> 决定装不装得上的三项检查都会照常跑。
 
 ---
 
@@ -274,8 +278,8 @@ node "$HOME/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js" plugin --profile web r
 **不需要 tsdown/vite 构建**，改完刷新页面即可。
 
 ```bash
-PLUGIN_DIR="$HOME/.dsh/profiles/web/node_modules/dsh-termux-notify"
-cd "$PLUGIN_DIR"
+git clone https://github.com/2966859746/dsh-termux-notify
+cd dsh-termux-notify
 
 npm test          # 三套一起跑
 node test/run.mjs         # 宿主：配置、argv 组装、节流、停用、真实超时与进程组清理、设置接线、环境检测
@@ -283,6 +287,8 @@ node test/integration.mjs # 用真实 cordis 加载插件，验证 waterfall 委
 node test/client.mjs      # 假浏览器 + 迷你 React 加载 client bundle，验证设置页渲染与写入
 ```
 
+`test/integration.mjs` 需要 `@deepseek-ai/cordis` 与 `@deepseek-ai/dsh-scope`，
+所以测试只在**仓库里**跑得起来（安装副本不含 `test/`，由 `scripts/check-integration.sh` 自动跳过）。
 其中有一项会真的起一个 `sleep 30` 子进程，验证超时兜底确实杀掉了整个进程组。
 
 ## 许可

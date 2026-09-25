@@ -20,6 +20,7 @@
   "files": [
     "lib",
     "client",
+    "scripts",
     "cordis.patch.yml",
     "README.md"
   ],
@@ -37,5 +38,8 @@
   "scripts": {
     "test": "node test/run.mjs && node test/integration.mjs && node test/client.mjs"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.2"
+  }
 }

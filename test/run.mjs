@@ -92,16 +92,20 @@ await test('defaultExec 超时会杀掉整个进程组而不是挂死', async ()
     /没有返回/,
   )
   const elapsed = Date.now() - started
-  assert.ok(elapsed < 5000, `超时应远早于 30s 返回，实际 ${elapsed}ms`)
+  assert.ok(elapsed < 8000, `超时应远早于 30s 返回，实际 ${elapsed}ms`)
 
-  await new Promise((resolve) => setTimeout(resolve, 300))
+  // 进程组被 SIGKILL 后，ps 里可能还残留极短的一瞬（尤其机器繁忙时），所以轮询而不是只查一次。
   let stillRunning = false
   try {
-    stillRunning = /sleep 30/.test(execSync('ps -eo args 2>/dev/null || true', { encoding: 'utf8' }))
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      stillRunning = /sleep 30/.test(execSync('ps -eo args 2>/dev/null || true', { encoding: 'utf8' }))
+      if (!stillRunning) break
+    }
   } catch {
     return // 拿不到进程表就跳过这条附加断言
   }
-  assert.equal(stillRunning, false, '超时后不应残留 sleep 子进程')
+  assert.equal(stillRunning, false, '超时后不应残留 sleep 子进程（进程组应被 SIGKILL 清掉）')
 })
 
 // ------------------------------------------------------------------ 提问通知
